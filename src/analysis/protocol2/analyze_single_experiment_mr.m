@@ -120,7 +120,11 @@ function analyze_single_experiment_mr(exp_folder, opts)
     end
 
     %% Step 5: Parse bar flash data and generate figures
-    [data_slow_bf, ~, mean_slow_bf, ~] = parse_bar_flash_data(f_data, v_data);
+    % prop_int = 0.5 matches old hardcoded gap_between_flashes = 5000 (slow)
+    % and 2500 (fast). Laura's updated parse_bar_flash_data now requires this
+    % argument: gap = 10000 * prop_int for slow, 5000 * prop_int for fast.
+    prop_int = 0.5;
+    [data_slow_bf, ~, mean_slow_bf, ~] = parse_bar_flash_data(f_data, v_data, prop_int);
 
     % Build orientation labels from LUT
     orient_labels = build_orient_labels(Tbl, opts.pattern_offset);

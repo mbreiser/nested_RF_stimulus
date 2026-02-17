@@ -96,9 +96,19 @@ The bar flash baseline (1:5000) covers the full pre-stimulus period (stim onset 
 
 **Open question:** Does the sweep baseline choice (excluding first 1000 samples) meaningfully affect PD computation or peak amplitude? This should be checked by comparing results with a 1:9000 baseline.
 
+## Upstream sync (2025-02-17)
+
+Synced local repo with Laura's latest `origin/main` (8 commits). Our work lives on the `mr-enhancements` branch, rebased cleanly on top.
+
+**What Laura changed:** Removed pharma-related code (5 plotting functions, `parse_bar_data_pharma.m`, `process_bars_p2_pharma.m`). Added new helpers (`addOrthoMetrics.m`, `shiftMaxColumnTo5.m`, `runGroupedStats.m`, `plotGroupedBox.m`, `plotPolarByGroup.m`). Added stimulus schematic figures and experiment log spreadsheet.
+
+**API break handled:** `parse_bar_flash_data` now requires a 3rd argument `prop_int` (proportion of inter-flash interval to keep). Old hardcoded `gap_between_flashes = 5000` equals `prop_int = 0.5`. Laura's newer `process_bar_flashes_p2.m` uses `prop_int = 0.75`. Our `_mr` variant uses `0.5` to match old behavior and keep timing calculations consistent (stim onset at sample 5001 with gap=5000).
+
+**Note:** `analyze_single_experiment.m` and `batch_analyze_1DRF.m` still call `parse_bar_flash_data` with only 2 args — they'll error on the updated code. This is Laura's incomplete migration; flag for her or fix locally when running batch analysis.
+
 ## Next steps
 
-1. **Validate population pipeline** — Run `batch_analyze_1DRF.m` on the full dataset, verify cell classification (ON/OFF, control/TTL), check that all 25 experiments process without errors
+1. **Validate population pipeline** — Run `batch_analyze_1DRF.m` on the full dataset, verify cell classification (ON/OFF, control/TTL), check that all 25 experiments process without errors. Will need to fix the missing `prop_int` arg in `batch_analyze_1DRF.m` first.
 2. **Baseline sensitivity check** — Compare single-cell PD and peak amplitude using different baseline windows to determine if the discrepancy matters
 3. **Fix Fig 3 green lines** — Investigate alternative z-ordering approaches
 4. **Figure 4 updates** — Orthogonal axis figure may need similar label/annotation updates as Fig 3 (per user, to be decided later)
