@@ -19,6 +19,12 @@ function fig = plot_polar_population(aligned_data_ctrl, aligned_data_ttl, title_
 %     title_str         - Figure title string
 %     opts              - (Optional) structure with fields:
 %                           .stat_method - 'median_mad' (default) or 'mean_sem'
+%                           .group1_label - label for group 1 (default: 'control')
+%                           .group2_label - label for group 2 (default: 'ttl')
+%                           .group1_line_color - [r g b] line color for group 1
+%                           .group1_fill_color - [r g b] fill color for group 1
+%                           .group2_line_color - [r g b] line color for group 2
+%                           .group2_fill_color - [r g b] fill color for group 2
 %
 %   OUTPUT:
 %     fig - Figure handle
@@ -42,6 +48,8 @@ function fig = plot_polar_population(aligned_data_ctrl, aligned_data_ttl, title_
 
     if nargin < 4, opts = struct(); end
     if ~isfield(opts, 'stat_method'), opts.stat_method = 'median_mad'; end
+    if ~isfield(opts, 'group1_label'), opts.group1_label = 'control'; end
+    if ~isfield(opts, 'group2_label'), opts.group2_label = 'ttl'; end
 
     % Compute group statistics
     stats_ctrl = compute_group_stats(aligned_data_ctrl, opts.stat_method);
@@ -56,11 +64,27 @@ function fig = plot_polar_population(aligned_data_ctrl, aligned_data_ttl, title_
         error('No valid aligned data in either group.');
     end
 
-    % Colours
-    col_ctrl_line = [0 0 0];            % black
-    col_ctrl_fill = [0.80 0.80 0.80];   % light gray
-    col_ttl_line  = [1 0 0];            % red
-    col_ttl_fill  = [1 0.70 0.70];      % light red
+    % Colours — use custom if provided, otherwise defaults
+    if isfield(opts, 'group1_line_color')
+        col_ctrl_line = opts.group1_line_color;
+    else
+        col_ctrl_line = [0 0 0];            % black
+    end
+    if isfield(opts, 'group1_fill_color')
+        col_ctrl_fill = opts.group1_fill_color;
+    else
+        col_ctrl_fill = [0.80 0.80 0.80];   % light gray
+    end
+    if isfield(opts, 'group2_line_color')
+        col_ttl_line = opts.group2_line_color;
+    else
+        col_ttl_line  = [1 0 0];            % red
+    end
+    if isfield(opts, 'group2_fill_color')
+        col_ttl_fill = opts.group2_fill_color;
+    else
+        col_ttl_fill  = [1 0.70 0.70];      % light red
+    end
 
     % Create figure with polar axes
     fig = figure('Name', title_str);
@@ -113,11 +137,11 @@ function fig = plot_polar_population(aligned_data_ctrl, aligned_data_ttl, title_
     hs = []; labs = {};
     if ~isempty(stats_ctrl.center)
         hs(end+1)   = hCtrl;
-        labs{end+1}  = sprintf('control (n=%d)', stats_ctrl.n);
+        labs{end+1}  = sprintf('%s (n=%d)', opts.group1_label, stats_ctrl.n);
     end
     if ~isempty(stats_ttl.center)
         hs(end+1)   = hTtl;
-        labs{end+1}  = sprintf('ttl (n=%d)', stats_ttl.n);
+        labs{end+1}  = sprintf('%s (n=%d)', opts.group2_label, stats_ttl.n);
     end
     if ~isempty(hs)
         legend(axFill, hs, labs, 'Location', 'best');
@@ -147,7 +171,7 @@ function stats = compute_group_stats(aligned_data, stat_method)
     vals = [];
     for k = 1:numel(aligned_data)
         d = aligned_data{k};
-        if isnumeric(d) && isequal(size(d), [16 2])
+        if isnumeric(d) && size(d, 2) == 2 && size(d, 1) >= 2
             if isempty(stats.theta)
                 stats.theta = d(:, 1);
             end

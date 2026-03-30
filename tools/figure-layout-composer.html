@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Figure Layout Composer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface2: #0f3460;
+    --accent: #4a90d9;
+    --accent-dim: #2d5a8e;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --border: #2a2a4a;
+    --canvas-bg: #ffffff;
+    --select-color: #4a90d9;
+    --danger: #e74c3c;
+    --success: #27ae60;
+    --warn: #f39c12;
+    --toolbar-bg: #1e1e3a;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    height: 100vh; display: flex; flex-direction: column;
+    overflow: hidden; font-size: 13px;
+  }
+
+  /* ── TOOLBAR ── */
+  .toolbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px; background: var(--toolbar-bg);
+    border-bottom: 1px solid var(--border); flex-shrink: 0; z-index: 100;
+    flex-wrap: wrap;
+  }
+  .toolbar h1 { font-size: 13px; font-weight: 600; margin-right: 8px; white-space: nowrap; color: var(--accent); }
+  .tsep { width: 1px; height: 22px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+  .tb { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 3px;
+    color: var(--text); cursor: pointer; font-size: 11px; white-space: nowrap; transition: background .12s; }
+  .tb:hover { background: var(--accent-dim); }
+  .tb.danger:hover { background: var(--danger); }
+  .tb.active { background: var(--accent); color: #fff; }
+  .tb[disabled] { opacity: .4; pointer-events: none; }
+  .tb svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .align-group { display: flex; gap: 2px; }
+  .align-group .tb { padding: 4px 5px; font-size: 10px; }
+
+  /* ── MAIN ── */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── CANVAS AREA ── */
+  .canvas-area {
+    flex: 1; overflow: auto; background: #111; display: flex;
+    align-items: flex-start; justify-content: center; padding: 20px; position: relative;
+  }
+  .canvas-wrap { position: relative; flex-shrink: 0; }
+  #canvas {
+    position: relative; background: var(--canvas-bg);
+    box-shadow: 0 4px 24px rgba(0,0,0,.5); overflow: visible; cursor: default;
+  }
+  #canvas.drop-over { outline: 3px dashed var(--accent); outline-offset: -3px; }
+  #gridSvg { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+  .max-h-line {
+    position: absolute; left: 0; right: 0; border-top: 2px dashed var(--danger);
+    z-index: 0; pointer-events: none;
+  }
+  .max-h-label {
+    position: absolute; right: 4px; top: -16px; font-size: 9px; color: var(--danger);
+    background: rgba(255,255,255,.85); padding: 0 3px; border-radius: 2px;
+  }
+  .zoom-badge {
+    position: absolute; bottom: 6px; left: 6px; background: rgba(0,0,0,.6);
+    color: #fff; padding: 2px 7px; border-radius: 3px; font-size: 10px; z-index: 50; pointer-events: none;
+  }
+
+  /* ── PANELS ── */
+  .panel {
+    position: absolute; border: 2px solid #ccc; background: #f5f5f5;
+    cursor: move; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; user-select: none;
+  }
+  .panel.selected { border-color: var(--select-color); box-shadow: 0 0 0 2px rgba(74,144,217,.4); }
+  .panel.multi-selected { border-color: #7fb3e0; box-shadow: 0 0 0 2px rgba(127,179,224,.3); }
+  .panel img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+  .panel .ph { color: #999; font-size: 10px; text-align: center; padding: 6px; pointer-events: none; line-height: 1.3; }
+  .panel .lbl {
+    position: absolute; top: -20px; left: -2px; color: #000; pointer-events: none;
+    white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 6px #fff;
+  }
+  .panel .type-badge {
+    position: absolute; bottom: 2px; right: 2px; font-size: 8px; padding: 1px 4px;
+    border-radius: 2px; pointer-events: none; opacity: .7;
+  }
+  .panel .type-badge.plot { background: #d4edda; color: #155724; }
+  .panel .type-badge.image { background: #d1ecf1; color: #0c5460; }
+
+  /* Resize handles */
+  .rh { position: absolute; background: var(--select-color); border-radius: 2px; z-index: 20; display: none; }
+  .panel.selected .rh { display: block; }
+  .rh.nw{top:-4px;left:-4px;width:8px;height:8px;cursor:nw-resize}
+  .rh.ne{top:-4px;right:-4px;width:8px;height:8px;cursor:ne-resize}
+  .rh.sw{bottom:-4px;left:-4px;width:8px;height:8px;cursor:sw-resize}
+  .rh.se{bottom:-4px;right:-4px;width:8px;height:8px;cursor:se-resize}
+  .rh.n{top:-3px;left:50%;transform:translateX(-50%);width:18px;height:6px;cursor:n-resize}
+  .rh.s{bottom:-3px;left:50%;transform:translateX(-50%);width:18px;height:6px;cursor:s-resize}
+  .rh.w{left:-3px;top:50%;transform:translateY(-50%);width:6px;height:18px;cursor:w-resize}
+  .rh.e{right:-3px;top:50%;transform:translateY(-50%);width:6px;height:18px;cursor:e-resize}
+
+  /* ── ANNOTATIONS ── */
+  .ann {
+    position: absolute; border-radius: 3px; padding: 3px 7px;
+    cursor: move; min-width: 50px; font-size: 11px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.15); user-select: none;
+  }
+  .ann.panel-note { background: #fff9c4; border: 1px solid #f9a825; color: #333; }
+  .ann.global-note { background: #e3f2fd; border: 1px solid #64b5f6; color: #1a237e; }
+  .ann.selected { border-color: var(--select-color); box-shadow: 0 0 0 2px rgba(74,144,217,.4); }
+  .ann.editing { cursor: text; user-select: text; }
+  .ann .atxt { outline: none; min-width: 30px; white-space: pre-wrap; word-break: break-word; }
+  .ann .adel {
+    position: absolute; top: -7px; right: -7px; width: 15px; height: 15px;
+    background: var(--danger); color: #fff; border-radius: 50%; font-size: 9px;
+    display: none; align-items: center; justify-content: center; cursor: pointer; line-height: 1;
+  }
+  .ann.selected .adel { display: flex; }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: 280px; background: var(--surface); border-left: 1px solid var(--border);
+    overflow-y: auto; flex-shrink: 0; display: flex; flex-direction: column;
+  }
+  .sb-sec { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .sb-sec h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); margin-bottom: 6px; }
+  .pr { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
+  .pr label { font-size: 11px; color: var(--text-dim); min-width: 28px; flex-shrink: 0; }
+  .pr input[type="number"], .pr input[type="text"], .pr select, .pr textarea {
+    flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+    color: var(--text); padding: 3px 5px; font-size: 11px;
+    font-family: 'SF Mono','Menlo',monospace; width: 0;
+  }
+  .pr textarea { font-family: inherit; min-height: 40px; resize: vertical; }
+  .pr input:focus, .pr select:focus, .pr textarea:focus { border-color: var(--accent); outline: none; }
+  .pr .u { font-size: 9px; color: var(--text-dim); flex-shrink: 0; }
+  .cb { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
+  .cb input { accent-color: var(--accent); }
+  .cb label { font-size: 11px; cursor: pointer; }
+  .sb-btn {
+    width: 100%; padding: 5px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--text); cursor: pointer; font-size: 11px; margin-top: 3px; transition: background .12s;
+  }
+  .sb-btn:hover { background: var(--accent-dim); }
+  .constraint-banner {
+    font-size: 10px; color: var(--warn); background: rgba(243,156,18,.08);
+    border: 1px solid rgba(243,156,18,.2); border-radius: 3px; padding: 4px 6px; margin-top: 4px; line-height: 1.4;
+  }
+  .fname { font-size: 9px; color: var(--text-dim); word-break: break-all; margin-top: 2px; font-family: monospace; }
+
+  /* ── PROMPT OUTPUT ── */
+  .prompt-sec { flex-shrink: 0; border-top: 1px solid var(--border); }
+  .prompt-hdr {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 10px; background: var(--toolbar-bg); cursor: pointer;
+  }
+  .prompt-hdr span { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); }
+  .prompt-body { max-height: 220px; overflow-y: auto; display: none; }
+  .prompt-body.open { display: block; }
+  .prompt-out {
+    width: 100%; min-height: 100px; background: var(--bg); border: none;
+    color: var(--text); font-family: 'SF Mono','Menlo',monospace; font-size: 10px;
+    padding: 8px 10px; resize: none; outline: none;
+  }
+  .copy-btn {
+    padding: 4px 10px; background: var(--accent); border: none; border-radius: 3px;
+    color: #fff; cursor: pointer; font-size: 11px; transition: background .12s;
+  }
+  .copy-btn:hover { background: #5ba0e9; }
+  .copy-btn.copied { background: var(--success); }
+
+  /* Column-width buttons */
+  .col-btns { display: flex; gap: 3px; margin-bottom: 5px; }
+  .col-btns .tb { flex: 1; justify-content: center; padding: 3px 4px; font-size: 10px; }
+  .col-btns .tb.active { background: var(--accent); }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 7px; height: 7px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  #fileInput { display: none; }
+
+  /* preset layout buttons */
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+
+  /* ── HELP MODAL ── */
+  .help-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    z-index: 9999; display: none; align-items: center; justify-content: center;
+  }
+  .help-overlay.open { display: flex; }
+  .help-modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    width: 680px; max-width: 92vw; max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 12px 48px rgba(0,0,0,.5); color: var(--text);
+  }
+  .help-modal .hm-hdr {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--border); position: sticky; top: 0;
+    background: var(--surface); z-index: 1;
+  }
+  .help-modal .hm-hdr h2 { font-size: 15px; font-weight: 600; color: var(--accent); }
+  .help-modal .hm-close {
+    width: 28px; height: 28px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); cursor: pointer; font-size: 16px;
+    display: flex; align-items: center; justify-content: center; transition: background .12s;
+  }
+  .help-modal .hm-close:hover { background: var(--danger); }
+  .help-modal .hm-body { padding: 16px 18px; line-height: 1.6; }
+  .help-modal h3 { font-size: 13px; color: var(--accent); margin: 16px 0 6px 0; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .help-modal h3:first-child { margin-top: 0; }
+  .help-modal p { font-size: 12px; margin-bottom: 8px; }
+  .help-modal ol, .help-modal ul { font-size: 12px; padding-left: 20px; margin-bottom: 10px; }
+  .help-modal li { margin-bottom: 4px; }
+  .help-modal .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; background: var(--accent); color: #fff; border-radius: 50%;
+    font-size: 11px; font-weight: 700; margin-right: 6px; flex-shrink: 0;
+  }
+  .help-modal .step {
+    display: flex; align-items: flex-start; margin-bottom: 10px; font-size: 12px;
+  }
+  .help-modal .step-text { flex: 1; }
+  .help-modal kbd {
+    display: inline-block; padding: 1px 5px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 3px; font-family: 'SF Mono','Menlo',monospace; font-size: 10px; color: var(--text);
+  }
+  .help-modal .tip {
+    background: rgba(74,144,217,.08); border-left: 3px solid var(--accent);
+    padding: 6px 10px; border-radius: 0 4px 4px 0; margin: 8px 0; font-size: 11px;
+  }
+  .help-modal table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0; }
+  .help-modal th { text-align: left; padding: 4px 8px; background: var(--bg); color: var(--text-dim); font-weight: 600; font-size: 10px; text-transform: uppercase; }
+  .help-modal td { padding: 4px 8px; border-top: 1px solid var(--border); }
+  .tb-help {
+    width: 24px; height: 24px; padding: 0; display: flex; align-items: center;
+    justify-content: center; border-radius: 50%; font-size: 13px; font-weight: 700;
+    background: var(--surface2); border: 1px solid var(--border); color: var(--accent);
+    cursor: pointer; transition: background .12s;
+  }
+  .tb-help:hover { background: var(--accent); color: #fff; }
+</style>
+</head>
+<body>
+
+<!-- ═══ TOOLBAR ═══ -->
+<div class="toolbar">
+  <h1>Figure Layout Composer</h1>
+  <div class="tsep"></div>
+  <button class="tb" id="btnAdd" title="Add empty panel">
+    <svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12"/></svg> Panel
+  </button>
+  <button class="tb" id="btnImg" title="Load preview image into selected panel">
+    <svg viewBox="0 0 16 16"><path d="M2 13h12M8 3v7M5 7l3 3 3-3"/></svg> Image
+  </button>
+  <button class="tb" id="btnAnnPanel" title="Add note attached to selected panel">
+    <svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="10" rx="1"/><path d="M5 14l2-2h-4z" fill="currentColor"/></svg> Panel Note
+  </button>
+  <button class="tb" id="btnAnnGlobal" title="Add free-floating note">
+    <svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="10" rx="1" stroke-dasharray="3,2"/><path d="M5 7h6M5 9h4"/></svg> Global Note
+  </button>
+  <div class="tsep"></div>
+  <div class="align-group">
+    <button class="tb" onclick="alignItems('left')" title="Align left">&#x258C;</button>
+    <button class="tb" onclick="alignItems('centerH')" title="Align center H">&#x2503;</button>
+    <button class="tb" onclick="alignItems('right')" title="Align right">&#x2590;</button>
+    <button class="tb" onclick="alignItems('top')" title="Align top">&#x2580;</button>
+    <button class="tb" onclick="alignItems('centerV')" title="Align center V">&#x2501;</button>
+    <button class="tb" onclick="alignItems('bottom')" title="Align bottom">&#x2584;</button>
+  </div>
+  <div class="tsep"></div>
+  <button class="tb" onclick="distribute('h')" title="Distribute horizontal spacing">&#x2194; Dist H</button>
+  <button class="tb" onclick="distribute('v')" title="Distribute vertical spacing">&#x2195; Dist V</button>
+  <button class="tb" onclick="matchSize('w')" title="Match widths">&#x21D4; W</button>
+  <button class="tb" onclick="matchSize('h')" title="Match heights">&#x21D5; H</button>
+  <div class="tsep"></div>
+  <button class="tb" id="btnFwd" title="Bring forward">&#x25B2;</button>
+  <button class="tb" id="btnBack" title="Send back">&#x25BC;</button>
+  <button class="tb danger" id="btnDel" title="Delete (Del)">&#x2715;</button>
+  <button class="tb" id="btnUndo" title="Undo (Cmd+Z)">&#x21A9;</button>
+  <button class="tb" id="btnDup" title="Duplicate (Cmd+D)">&#x29C9;</button>
+  <div style="flex:1"></div>
+  <span style="font-size:10px;color:var(--text-dim)">Drop PNGs on canvas &bull; Shift+click multi-select &bull; Cmd+Z undo</span>
+  <button class="tb-help" id="btnHelp" title="Help & Guide">?</button>
+</div>
+
+<!-- ═══ HELP MODAL ═══ -->
+<div class="help-overlay" id="helpOverlay">
+<div class="help-modal">
+  <div class="hm-hdr">
+    <h2>Figure Layout Composer &mdash; Help</h2>
+    <button class="hm-close" id="helpClose">&times;</button>
+  </div>
+  <div class="hm-body">
+
+    <h3>Quick Start: Step-by-Step</h3>
+
+    <div class="step"><span class="step-num">1</span><div class="step-text"><strong>Pick your journal.</strong> Select from the Journal dropdown in the sidebar. This auto-sets canvas width, label formatting (uppercase vs lowercase, size), font sizes, and shows a constraint banner with that journal's requirements.</div></div>
+
+    <div class="step"><span class="step-num">2</span><div class="step-text"><strong>Choose column width.</strong> Click the column-width buttons (1-col, 1.5-col, Full) below the journal dropdown. The canvas resizes to match. A dashed red line shows the journal's max figure height.</div></div>
+
+    <div class="step"><span class="step-num">3</span><div class="step-text"><strong>Add panels.</strong> Either click <strong>Panel</strong> in the toolbar to add an empty panel, or <strong>drag-and-drop PNG files</strong> directly onto the white canvas. PNGs are just rough previews &mdash; the final figure will be generated as a vector PDF by Claude.</div></div>
+
+    <div class="step"><span class="step-num">4</span><div class="step-text"><strong>Arrange your layout.</strong> Drag panels to reposition. Resize by dragging the blue corner/edge handles. Use <strong>Shift+click</strong> to multi-select, then use the alignment buttons (top toolbar) to align edges or distribute spacing evenly.</div></div>
+
+    <div class="step"><span class="step-num">5</span><div class="step-text"><strong>Describe each panel.</strong> Click a panel to select it, then in the sidebar: set its <strong>Type</strong> (Plot = Claude generates plotting code; Image = static file embedded directly) and write a <strong>Description</strong> of what it shows (e.g., &ldquo;polar tuning curve, 28 dps bar sweeps, ON-control cells&rdquo;). This is the key info Claude uses.</div></div>
+
+    <div class="step"><span class="step-num">6</span><div class="step-text"><strong>Add notes.</strong> Click <strong>Panel Note</strong> to attach an instruction to the selected panel (shown in yellow, e.g., &ldquo;increase line weight&rdquo;). Click <strong>Global Note</strong> for figure-wide instructions (shown in blue, e.g., &ldquo;use same y-axis for a&ndash;c&rdquo;). Double-click any note to edit.</div></div>
+
+    <div class="step"><span class="step-num">7</span><div class="step-text"><strong>Copy the spec.</strong> The Export section at the bottom of the sidebar shows a live-updating specification. Click <strong>Copy Spec</strong>, paste it into Claude, and Claude will write MATLAB or Python code that produces the final vector PDF figure.</div></div>
+
+    <div class="tip">The workflow is iterative: adjust the layout, re-copy the spec, paste into Claude, and Claude updates the code. PNGs are throwaway previews &mdash; the final output is always code that generates an editable vector PDF.</div>
+
+    <h3>Layout Tools</h3>
+    <ul>
+      <li><strong>Preset layouts:</strong> Use the Layout Presets section in the sidebar for quick starting points (2 side-by-side, 2&times;2 grid, 3&times;2 grid, 1 wide + 2 below).</li>
+      <li><strong>Alignment:</strong> Select 2+ panels with Shift+click, then use the align buttons: <code>&#x258C; &#x2503; &#x2590;</code> (left, center, right) and <code>&#x2580; &#x2501; &#x2584;</code> (top, center, bottom).</li>
+      <li><strong>Distribute:</strong> With 3+ panels selected, <strong>Dist H</strong> / <strong>Dist V</strong> equalizes the gaps between them.</li>
+      <li><strong>Match size:</strong> With 2+ panels selected, <strong>W</strong> / <strong>H</strong> makes all panels match the first panel's width or height.</li>
+      <li><strong>Margin &amp; Gutter:</strong> Set global outer margin and inter-panel gap in the Grid &amp; Snap section. These values are used by preset layouts and the distribute tool.</li>
+      <li><strong>Snap to grid:</strong> Enabled by default (0.25&Prime; steps). Toggle off in sidebar or hold Shift while arrow-nudging for fine 0.01&Prime; steps.</li>
+    </ul>
+
+    <h3>Panel Properties</h3>
+    <ul>
+      <li><strong>Type:</strong> <code>Plot</code> = Claude generates the plotting code from your data. <code>Image</code> = a static file (microscopy, schematic, diagram) that Claude embeds directly.</li>
+      <li><strong>Description:</strong> Free text. Be specific about what data to plot, which cells/conditions, aggregation method (e.g., &ldquo;median&plusmn;MAD&rdquo;). The more detail, the better Claude's first pass.</li>
+      <li><strong>Lock aspect ratio:</strong> When checked, resizing preserves the panel's proportions. Auto-set to the image's native ratio when you load a preview PNG.</li>
+      <li><strong>Replace Image:</strong> Load a different preview PNG into the selected panel.</li>
+    </ul>
+
+    <h3>Journal Presets</h3>
+    <p>Each journal preset auto-configures:</p>
+    <table>
+      <tr><th>Setting</th><th>What it controls</th></tr>
+      <tr><td>Canvas width</td><td>Column widths per journal spec (in inches)</td></tr>
+      <tr><td>Max height line</td><td>Red dashed line at journal's max figure height</td></tr>
+      <tr><td>Label style</td><td>Font size, bold/regular, uppercase/lowercase (Nature uses 8pt bold lowercase; Cell uses 7pt bold UPPERCASE)</td></tr>
+      <tr><td>Font sizes</td><td>Axis labels, tick labels, title &mdash; set to journal's recommended range</td></tr>
+      <tr><td>Constraint banner</td><td>Shows min line weight, DPI, color mode, special rules</td></tr>
+    </table>
+    <div class="tip">You can override any auto-configured value after selecting a preset. The preset just gives you a fast starting point.</div>
+
+    <h3>Keyboard Shortcuts</h3>
+    <table>
+      <tr><th>Key</th><th>Action</th></tr>
+      <tr><td><kbd>Cmd</kbd>+<kbd>Z</kbd></td><td>Undo</td></tr>
+      <tr><td><kbd>Cmd</kbd>+<kbd>D</kbd></td><td>Duplicate selected panel(s)</td></tr>
+      <tr><td><kbd>Cmd</kbd>+<kbd>A</kbd></td><td>Select all panels</td></tr>
+      <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>Delete selected</td></tr>
+      <tr><td><kbd>Escape</kbd></td><td>Deselect all</td></tr>
+      <tr><td><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd></td><td>Nudge selected (grid-step increment)</td></tr>
+      <tr><td><kbd>Shift</kbd>+Arrow</td><td>Fine nudge (0.01&Prime;)</td></tr>
+      <tr><td><kbd>Shift</kbd>+Click</td><td>Multi-select panels</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Toggle this help panel</td></tr>
+    </table>
+
+    <h3>Output &amp; Workflow</h3>
+    <p>The exported spec includes:</p>
+    <ul>
+      <li><strong>Canvas dimensions</strong> &mdash; exact size in inches</li>
+      <li><strong>Panel positions &amp; sizes</strong> &mdash; in inches, for precise placement</li>
+      <li><strong>Panel types &amp; descriptions</strong> &mdash; tells Claude what code to write per panel</li>
+      <li><strong>Annotations</strong> &mdash; panel-specific and global instructions</li>
+      <li><strong>Font spec</strong> &mdash; family, sizes for labels/axes/ticks/titles</li>
+      <li><strong>Journal constraints</strong> &mdash; min line weight, DPI, color mode, colorblind-safe flag</li>
+    </ul>
+    <p>Toggle <strong>MATLAB / Python</strong> in the Output section of the sidebar to change the prompt language. Claude will generate the corresponding code (<code>tiledlayout</code> for MATLAB, <code>gridspec</code> for Python).</p>
+
+    <h3>Tips</h3>
+    <ul>
+      <li>Start with a layout preset, then drag your PNGs onto each panel to replace the placeholders.</li>
+      <li>Use the zoom slider to get a better view of large figures or fine details.</li>
+      <li>Panel descriptions are the most important field &mdash; be specific about data source, cell type, conditions, and plot style.</li>
+      <li>Use Global Notes for instructions that span multiple panels (shared axes, color schemes, etc.).</li>
+      <li>The spec updates live as you make changes &mdash; no need to click &ldquo;generate&rdquo;.</li>
+    </ul>
+
+  </div>
+</div>
+</div>
+
+<!-- ═══ MAIN ═══ -->
+<div class="main">
+  <div class="canvas-area" id="canvasArea">
+    <div class="canvas-wrap">
+      <div id="canvas">
+        <svg id="gridSvg"></svg>
+      </div>
+    </div>
+    <div class="zoom-badge" id="zoomBadge">100%</div>
+  </div>
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <div class="sidebar">
+
+    <!-- Journal Preset -->
+    <div class="sb-sec">
+      <h3>Journal</h3>
+      <div class="pr">
+        <select id="selJournal" style="flex:1"></select>
+      </div>
+      <div class="col-btns" id="colBtns"></div>
+      <div class="constraint-banner" id="constraintBanner" style="display:none"></div>
+    </div>
+
+    <!-- Canvas -->
+    <div class="sb-sec">
+      <h3>Canvas</h3>
+      <div class="pr">
+        <label>W</label><input type="number" id="inpCW" min=".5" max="24" step=".05">
+        <span class="u">in</span>
+        <label style="margin-left:4px">H</label><input type="number" id="inpCH" min=".5" max="36" step=".05">
+        <span class="u">in</span>
+      </div>
+      <div class="pr">
+        <label>Zoom</label>
+        <input type="range" id="inpZoom" min="25" max="250" value="100" style="flex:1;accent-color:var(--accent)">
+        <span class="u" id="zoomLbl">100%</span>
+      </div>
+    </div>
+
+    <!-- Grid & Snap -->
+    <div class="sb-sec">
+      <h3>Grid & Snap</h3>
+      <div style="display:flex;gap:10px">
+        <div class="cb"><input type="checkbox" id="chkGrid" checked><label for="chkGrid">Grid</label></div>
+        <div class="cb"><input type="checkbox" id="chkSnap" checked><label for="chkSnap">Snap</label></div>
+      </div>
+      <div class="pr">
+        <label>Size</label><input type="number" id="inpGrid" min=".05" max="2" step=".05" value=".25"><span class="u">in</span>
+        <label style="margin-left:6px">Gutter</label><input type="number" id="inpGutter" min="0" max="2" step=".05" value=".15"><span class="u">in</span>
+      </div>
+      <div class="pr">
+        <label>Margin</label><input type="number" id="inpMargin" min="0" max="2" step=".05" value=".25"><span class="u">in</span>
+      </div>
+    </div>
+
+    <!-- Labels -->
+    <div class="sb-sec">
+      <h3>Labels</h3>
+      <div style="display:flex;gap:10px">
+        <div class="cb"><input type="checkbox" id="chkLabels" checked><label for="chkLabels">Show</label></div>
+        <div class="cb"><input type="checkbox" id="chkBold" checked><label for="chkBold">Bold</label></div>
+      </div>
+      <div class="pr">
+        <label>Size</label><input type="number" id="inpLblSz" min="5" max="24" step="1" value="8"><span class="u">pt</span>
+        <label style="margin-left:6px">Case</label>
+        <select id="selCase" style="flex:1"><option value="lower">lowercase</option><option value="upper">UPPERCASE</option></select>
+      </div>
+    </div>
+
+    <!-- Font Spec -->
+    <div class="sb-sec">
+      <h3>Font Spec</h3>
+      <div class="pr">
+        <label>Family</label>
+        <select id="selFont" style="flex:1">
+          <option>Arial</option><option>Helvetica</option><option>Times New Roman</option>
+        </select>
+      </div>
+      <div class="pr">
+        <label>Axis</label><input type="number" id="inpAxisSz" min="4" max="20" step=".5" value="7"><span class="u">pt</span>
+        <label style="margin-left:4px">Tick</label><input type="number" id="inpTickSz" min="4" max="20" step=".5" value="6"><span class="u">pt</span>
+      </div>
+      <div class="pr">
+        <label>Title</label><input type="number" id="inpTitleSz" min="4" max="20" step=".5" value="7"><span class="u">pt</span>
+      </div>
+    </div>
+
+    <!-- Selected Panel -->
+    <div class="sb-sec" id="secPanel" style="display:none">
+      <h3>Selected Panel</h3>
+      <div class="pr">
+        <label>Label</label><input type="text" id="inpPLbl" maxlength="4" style="width:40px;flex:none">
+        <label style="margin-left:4px">Type</label>
+        <select id="selPType" style="flex:1"><option value="plot">Plot</option><option value="image">Image</option></select>
+      </div>
+      <div class="pr">
+        <label>X</label><input type="number" id="inpPX" min="0" step=".05">
+        <span class="u">in</span>
+        <label style="margin-left:4px">Y</label><input type="number" id="inpPY" min="0" step=".05">
+        <span class="u">in</span>
+      </div>
+      <div class="pr">
+        <label>W</label><input type="number" id="inpPW" min=".1" step=".05">
+        <span class="u">in</span>
+        <label style="margin-left:4px">H</label><input type="number" id="inpPH" min=".1" step=".05">
+        <span class="u">in</span>
+      </div>
+      <div class="cb"><input type="checkbox" id="chkLock"><label for="chkLock">Lock aspect ratio</label></div>
+      <div class="pr" style="align-items:flex-start">
+        <label>Desc</label><textarea id="inpPDesc" placeholder="What this panel shows..."></textarea>
+      </div>
+      <div class="fname" id="pFname">No preview image</div>
+      <button class="sb-btn" id="btnRepl">Replace Preview Image...</button>
+    </div>
+
+    <!-- Selected Annotation -->
+    <div class="sb-sec" id="secAnn" style="display:none">
+      <h3>Selected Annotation</h3>
+      <div class="pr">
+        <label>X</label><input type="number" id="inpAX" min="0" step=".05"><span class="u">in</span>
+        <label style="margin-left:4px">Y</label><input type="number" id="inpAY" min="0" step=".05"><span class="u">in</span>
+      </div>
+    </div>
+
+    <!-- Output Language -->
+    <div class="sb-sec">
+      <h3>Output</h3>
+      <div class="pr">
+        <label>Lang</label>
+        <select id="selLang" style="flex:1"><option value="MATLAB">MATLAB</option><option value="Python">Python</option></select>
+      </div>
+    </div>
+
+    <!-- Preset Layouts -->
+    <div class="sb-sec">
+      <h3>Layout Presets</h3>
+      <div class="preset-grid">
+        <button class="sb-btn" onclick="applyPreset('2x1')">2 side-by-side</button>
+        <button class="sb-btn" onclick="applyPreset('2x2')">2&times;2 grid</button>
+        <button class="sb-btn" onclick="applyPreset('3x2')">3&times;2 grid</button>
+        <button class="sb-btn" onclick="applyPreset('1over2')">1 wide + 2</button>
+      </div>
+      <button class="sb-btn" onclick="applyPreset('clear')" style="margin-top:4px">Clear all</button>
+    </div>
+
+    <!-- Export -->
+    <div class="sb-sec" style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <h3>Export Spec</h3>
+      <div class="prompt-body open" style="flex:1;max-height:none;overflow:auto">
+        <textarea class="prompt-out" id="promptOut" readonly></textarea>
+      </div>
+      <div style="display:flex;gap:5px;margin-top:5px">
+        <button class="copy-btn" id="btnCopy" style="flex:1">Copy Spec</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept="image/*" multiple>
+
+<script>
+// ═══════════════════════════════════════════════════
+// JOURNAL PRESETS
+// ═══════════════════════════════════════════════════
+const JOURNALS = {
+  'Nature / Nat Neuro / Nat Methods': {
+    widths: { '1-col': 3.50, '1.5-col': 4.72, 'Full': 7.20 },
+    maxH_in: 9.72, // 247mm
+    font: 'Arial', labelPt: 8, labelBold: true, labelCase: 'lower',
+    axisPt: 7, tickPt: 6, titlePt: 7,
+    constraints: 'Min line weight: 0.25pt | DPI: 300+ (1000 line art) | RGB | Colorblind-safe required | No gridlines | Panel labels: 8pt bold lowercase',
+    minLineWt: 0.25, minDPI: 300, colorMode: 'RGB', colorblind: true,
+  },
+  'Cell / Neuron / Current Biology': {
+    widths: { '1-col': 3.35, '1.5-col': 4.49, 'Full': 6.85 },
+    maxH_in: 7.99, // 203mm
+    font: 'Arial', labelPt: 7, labelBold: true, labelCase: 'upper',
+    axisPt: 7, tickPt: 6, titlePt: 7,
+    constraints: 'Min line weight: 0.5pt | DPI: 300+ (1000 line art) | RGB | Avoid red+green | Panel labels: UPPERCASE bold',
+    minLineWt: 0.5, minDPI: 300, colorMode: 'RGB', colorblind: true,
+  },
+  'Science (AAAS)': {
+    widths: { '1-col': 2.24, '2-col': 4.76, 'Full': 7.24 },
+    maxH_in: null,
+    font: 'Helvetica', labelPt: 7, labelBold: true, labelCase: 'upper',
+    axisPt: 7, tickPt: 6, titlePt: 7,
+    constraints: 'Min line weight: 0.5pt | DPI: 300+ | Min text: 5pt after reduction | Panel labels: UPPERCASE | No JPEG at revision',
+    minLineWt: 0.5, minDPI: 300, colorMode: 'RGB', colorblind: true,
+  },
+  'eLife': {
+    widths: { 'Min': 3.94, 'Full': 7.87 },
+    maxH_in: null,
+    font: 'Arial', labelPt: 8, labelBold: true, labelCase: 'lower',
+    axisPt: 7, tickPt: 6, titlePt: 7,
+    constraints: 'DPI: 300 | RGB | Online-only (flexible sizing)',
+    minLineWt: 0.25, minDPI: 300, colorMode: 'RGB', colorblind: false,
+  },
+  'PNAS': {
+    widths: { '1-col': 3.42, '1.5-col': 4.49, 'Full': 7.01 },
+    maxH_in: 8.86, // 225mm
+    font: 'Arial', labelPt: 7, labelBold: true, labelCase: 'upper',
+    axisPt: 7, tickPt: 6, titlePt: 7,
+    constraints: 'DPI: 300 (600 combo, 1000-1200 line art) | RGB | Font: 6-8pt range | Panel labels: UPPERCASE',
+    minLineWt: 0.5, minDPI: 300, colorMode: 'RGB', colorblind: true,
+  },
+  'J Neuroscience': {
+    widths: { '1-col': 3.35, '1.5-col': 4.57, 'Full': 6.93 },
+    maxH_in: null,
+    font: 'Arial', labelPt: 8, labelBold: true, labelCase: 'upper',
+    axisPt: 7, tickPt: 6, titlePt: 7,
+    constraints: 'DPI: 300 (1200 line art) | RGB | Colorblind-safe | Remove top & right axis lines | No 2-bar histograms',
+    minLineWt: 0.5, minDPI: 300, colorMode: 'RGB', colorblind: true,
+  },
+  'PLOS Biology': {
+    widths: { 'Text col': 5.20, 'Full': 7.50 },
+    maxH_in: 8.75, // 222mm
+    font: 'Arial', labelPt: 10, labelBold: true, labelCase: 'upper',
+    axisPt: 9, tickPt: 8, titlePt: 9,
+    constraints: 'DPI: 300-600 | RGB 8-bit | Min line: 0.57pt | Font: 8-12pt | TIFF preferred | Cyan+magenta over red+green',
+    minLineWt: 0.57, minDPI: 300, colorMode: 'RGB', colorblind: true,
+  },
+  'Custom': {
+    widths: {},
+    maxH_in: null,
+    font: 'Arial', labelPt: 8, labelBold: true, labelCase: 'upper',
+    axisPt: 7, tickPt: 6, titlePt: 7,
+    constraints: '',
+    minLineWt: 0.5, minDPI: 300, colorMode: 'RGB', colorblind: true,
+  },
+};
+
+// ═══════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════
+const S = {
+  journal: 'Nature / Nat Neuro / Nat Methods',
+  colKey: 'Full',
+  canvas: { w: 7.20, h: 9.72 },
+  zoom: 100,
+  grid: { show: true, snap: true, size: 0.25 },
+  gutter: 0.15,
+  margin: 0.25,
+  labels: { show: true, bold: true, size: 8, case: 'lower' },
+  font: { family: 'Arial', axisPt: 7, tickPt: 6, titlePt: 7 },
+  outputLang: 'MATLAB',
+  panels: [],
+  annotations: [],
+  sel: new Set(),     // selected panel/ann ids
+  selType: null,      // 'panel' | 'ann' | 'mixed'
+  nextLbl: 0,
+  nextId: 1,
+  history: [],
+  maxHist: 40,
+};
+
+const $ = id => document.getElementById(id);
+const canvas = $('canvas');
+const gridSvg = $('gridSvg');
+const canvasArea = $('canvasArea');
+const fileInput = $('fileInput');
+let dragSt = null;
+let fileTarget = null;
+
+// ═══════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════
+const DPI_SCREEN = 96;
+function i2p(inches) { return inches * DPI_SCREEN * (S.zoom / 100); }
+function p2i(px) { return px / (DPI_SCREEN * (S.zoom / 100)); }
+function snap(v) { return S.grid.snap ? Math.round(v / S.grid.size) * S.grid.size : v; }
+function rnd(v) { return Math.round(v * 100) / 100; }
+function nextLbl() { const c = String.fromCharCode(65 + S.nextLbl); S.nextLbl++; return S.labels.case === 'lower' ? c.toLowerCase() : c; }
+function fmtLbl(l) { return S.labels.case === 'lower' ? l.toLowerCase() : l.toUpperCase(); }
+function findP(id) { return S.panels.find(p => p.id === id); }
+function findA(id) { return S.annotations.find(a => a.id === id); }
+function findAny(id) { return findP(id) || findA(id); }
+function isPanel(id) { return !!findP(id); }
+
+function saveHist() {
+  S.history.push(JSON.stringify({ panels: S.panels, annotations: S.annotations, nextLbl: S.nextLbl }));
+  if (S.history.length > S.maxHist) S.history.shift();
+}
+function undo() {
+  if (!S.history.length) return;
+  const snap = JSON.parse(S.history.pop());
+  S.panels = snap.panels; S.annotations = snap.annotations; S.nextLbl = snap.nextLbl;
+  S.sel.clear(); S.selType = null;
+  renderAll();
+}
+
+function selectedPanels() { return S.panels.filter(p => S.sel.has(p.id)); }
+function primaryPanel() { const sp = selectedPanels(); return sp.length === 1 ? sp[0] : null; }
+function selectedAnns() { return S.annotations.filter(a => S.sel.has(a.id)); }
+function primaryAnn() { const sa = selectedAnns(); return sa.length === 1 ? sa[0] : null; }
+
+// ═══════════════════════════════════════════════════
+// JOURNAL PRESET APPLICATION
+// ═══════════════════════════════════════════════════
+function applyJournal(name, colKey) {
+  const j = JOURNALS[name];
+  if (!j) return;
+  S.journal = name;
+
+  // Column width
+  const keys = Object.keys(j.widths);
+  if (colKey && j.widths[colKey] != null) {
+    S.colKey = colKey;
+  } else if (keys.length) {
+    S.colKey = keys[keys.length - 1]; // default to widest
+  }
+  if (j.widths[S.colKey] != null) S.canvas.w = j.widths[S.colKey];
+  if (j.maxH_in) S.canvas.h = j.maxH_in;
+
+  S.labels.bold = j.labelBold; S.labels.size = j.labelPt; S.labels.case = j.labelCase;
+  S.font.family = j.font; S.font.axisPt = j.axisPt; S.font.tickPt = j.tickPt; S.font.titlePt = j.titlePt;
+
+  // Re-case existing labels
+  S.panels.forEach(p => p.label = fmtLbl(p.label));
+
+  syncSidebar();
+  renderAll();
+}
+
+function buildColBtns() {
+  const j = JOURNALS[S.journal];
+  const cont = $('colBtns');
+  cont.innerHTML = '';
+  if (!j) return;
+  Object.keys(j.widths).forEach(k => {
+    const b = document.createElement('button');
+    b.className = 'tb' + (k === S.colKey ? ' active' : '');
+    b.textContent = k;
+    b.onclick = () => { applyJournal(S.journal, k); };
+    cont.appendChild(b);
+  });
+
+  // Constraint banner
+  const ban = $('constraintBanner');
+  if (j.constraints) { ban.style.display = 'block'; ban.textContent = j.constraints; }
+  else { ban.style.display = 'none'; }
+}
+
+// ═══════════════════════════════════════════════════
+// CANVAS & GRID
+// ═══════════════════════════════════════════════════
+function updateCanvas() {
+  const w = i2p(S.canvas.w), h = i2p(S.canvas.h);
+  canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+  drawGrid();
+  drawMaxH();
+}
+
+function drawGrid() {
+  const w = i2p(S.canvas.w), h = i2p(S.canvas.h);
+  if (!S.grid.show) { gridSvg.innerHTML = ''; gridSvg.setAttribute('width', w); gridSvg.setAttribute('height', h); return; }
+  const step = i2p(S.grid.size);
+  const inchPx = i2p(1);
+  let svg = '';
+  // Minor grid
+  for (let x = step; x < w; x += step) svg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="#f0f0f0" stroke-width=".5" stroke-dasharray="2,4"/>`;
+  for (let y = step; y < h; y += step) svg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="#f0f0f0" stroke-width=".5" stroke-dasharray="2,4"/>`;
+  // Major grid (every inch)
+  for (let x = inchPx; x < w; x += inchPx) svg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="#ddd" stroke-width=".5"/>`;
+  for (let y = inchPx; y < h; y += inchPx) svg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="#ddd" stroke-width=".5"/>`;
+  gridSvg.innerHTML = svg;
+  gridSvg.setAttribute('width', w); gridSvg.setAttribute('height', h);
+}
+
+function drawMaxH() {
+  canvas.querySelectorAll('.max-h-line').forEach(e => e.remove());
+  const j = JOURNALS[S.journal];
+  if (!j || !j.maxH_in) return;
+  const py = i2p(j.maxH_in);
+  if (py > i2p(S.canvas.h)) return; // Don't show if canvas is smaller
+  const el = document.createElement('div');
+  el.className = 'max-h-line'; el.style.top = py + 'px';
+  const lbl = document.createElement('span');
+  lbl.className = 'max-h-label'; lbl.textContent = `max height ${j.maxH_in}"`;
+  el.appendChild(lbl);
+  canvas.appendChild(el);
+}
+
+// ═══════════════════════════════════════════════════
+// RENDERING
+// ═══════════════════════════════════════════════════
+function renderAll() {
+  canvas.querySelectorAll('.panel,.ann').forEach(e => e.remove());
+  updateCanvas();
+
+  // Panels
+  S.panels.forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'panel' + (S.sel.has(p.id) && S.sel.size === 1 ? ' selected' : '') + (S.sel.has(p.id) && S.sel.size > 1 ? ' multi-selected selected' : '');
+    el.dataset.id = p.id; el.dataset.kind = 'panel';
+    el.style.left = i2p(p.x)+'px'; el.style.top = i2p(p.y)+'px';
+    el.style.width = i2p(p.w)+'px'; el.style.height = i2p(p.h)+'px';
+    el.style.zIndex = p.z || 1;
+
+    if (p.imgData) {
+      const img = document.createElement('img'); img.src = p.imgData; img.draggable = false;
+      el.appendChild(img);
+    } else {
+      const ph = document.createElement('div'); ph.className = 'ph';
+      ph.textContent = p.label + (p.desc ? '\n' + p.desc.slice(0, 40) : '\nDrop image preview');
+      el.appendChild(ph);
+    }
+
+    if (S.labels.show) {
+      const lbl = document.createElement('div'); lbl.className = 'lbl';
+      lbl.textContent = fmtLbl(p.label);
+      lbl.style.fontSize = S.labels.size + 'px';
+      lbl.style.fontWeight = S.labels.bold ? '700' : '400';
+      el.appendChild(lbl);
+    }
+
+    // Type badge
+    const tb = document.createElement('div');
+    tb.className = 'type-badge ' + p.type; tb.textContent = p.type;
+    el.appendChild(tb);
+
+    // Resize handles
+    ['nw','n','ne','w','e','sw','s','se'].forEach(h => {
+      const hd = document.createElement('div'); hd.className = 'rh ' + h; hd.dataset.handle = h;
+      el.appendChild(hd);
+    });
+    canvas.appendChild(el);
+  });
+
+  // Annotations
+  S.annotations.forEach(a => {
+    const el = document.createElement('div');
+    el.className = 'ann ' + (a.kind === 'panel' ? 'panel-note' : 'global-note') + (S.sel.has(a.id) ? ' selected' : '');
+    el.dataset.id = a.id; el.dataset.kind = 'ann';
+    el.style.left = i2p(a.x)+'px'; el.style.top = i2p(a.y)+'px';
+    el.style.zIndex = a.z || 50;
+
+    const txt = document.createElement('div'); txt.className = 'atxt'; txt.textContent = a.text;
+    el.appendChild(txt);
+
+    const del = document.createElement('div'); del.className = 'adel'; del.textContent = '\u00d7';
+    del.onclick = (e) => { e.stopPropagation(); saveHist(); S.annotations = S.annotations.filter(x=>x.id!==a.id); S.sel.delete(a.id); renderAll(); };
+    el.appendChild(del);
+    canvas.appendChild(el);
+  });
+
+  updateSidebar();
+  updatePrompt();
+}
+
+// ═══════════════════════════════════════════════════
+// SIDEBAR SYNC
+// ═══════════════════════════════════════════════════
+function syncSidebar() {
+  $('selJournal').value = S.journal;
+  $('inpCW').value = rnd(S.canvas.w); $('inpCH').value = rnd(S.canvas.h);
+  $('inpZoom').value = S.zoom; $('zoomLbl').textContent = S.zoom + '%'; $('zoomBadge').textContent = S.zoom + '%';
+  $('chkGrid').checked = S.grid.show; $('chkSnap').checked = S.grid.snap;
+  $('inpGrid').value = S.grid.size; $('inpGutter').value = S.gutter; $('inpMargin').value = S.margin;
+  $('chkLabels').checked = S.labels.show; $('chkBold').checked = S.labels.bold;
+  $('inpLblSz').value = S.labels.size; $('selCase').value = S.labels.case;
+  $('selFont').value = S.font.family; $('inpAxisSz').value = S.font.axisPt;
+  $('inpTickSz').value = S.font.tickPt; $('inpTitleSz').value = S.font.titlePt;
+  $('selLang').value = S.outputLang;
+  buildColBtns();
+}
+
+function updateSidebar() {
+  const sp = $('secPanel'); const sa = $('secAnn');
+  sp.style.display = 'none'; sa.style.display = 'none';
+
+  const pp = primaryPanel();
+  if (pp) {
+    sp.style.display = 'block';
+    $('inpPLbl').value = pp.label; $('selPType').value = pp.type;
+    $('inpPX').value = rnd(pp.x); $('inpPY').value = rnd(pp.y);
+    $('inpPW').value = rnd(pp.w); $('inpPH').value = rnd(pp.h);
+    $('chkLock').checked = !!pp.lockAR;
+    $('inpPDesc').value = pp.desc || '';
+    $('pFname').textContent = pp.fileName || 'No preview image';
+  }
+  const pa = primaryAnn();
+  if (pa) {
+    sa.style.display = 'block';
+    $('inpAX').value = rnd(pa.x); $('inpAY').value = rnd(pa.y);
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// PANEL / ANNOTATION CREATION
+// ═══════════════════════════════════════════════════
+function addPanel(opts = {}) {
+  saveHist();
+  const p = {
+    id: S.nextId++,
+    label: opts.label || nextLbl(),
+    type: opts.type || 'plot',
+    desc: opts.desc || '',
+    x: opts.x != null ? opts.x : S.margin,
+    y: opts.y != null ? opts.y : S.margin + S.panels.length * 2.5,
+    w: opts.w || Math.min(3, S.canvas.w - S.margin * 2),
+    h: opts.h || 2.25,
+    fileName: opts.fileName || null,
+    imgData: opts.imgData || null,
+    ar: opts.ar || null,
+    lockAR: false,
+    z: S.panels.length + 1,
+  };
+  if (p.y + p.h > S.canvas.h) p.y = Math.max(0, S.canvas.h - p.h);
+  S.panels.push(p);
+  S.sel.clear(); S.sel.add(p.id); S.selType = 'panel';
+  renderAll();
+  return p;
+}
+
+function addAnnotation(kind, x, y) {
+  saveHist();
+  const a = {
+    id: S.nextId++,
+    kind: kind, // 'panel' | 'global'
+    text: kind === 'panel' ? 'Panel note: edit me' : 'Global note: edit me',
+    x: x != null ? x : S.margin,
+    y: y != null ? y : S.canvas.h - 1 - S.annotations.length * 0.4,
+    panelId: kind === 'panel' ? (primaryPanel() ? primaryPanel().id : null) : null,
+    z: 50 + S.annotations.length,
+  };
+  S.annotations.push(a);
+  S.sel.clear(); S.sel.add(a.id); S.selType = 'ann';
+  renderAll();
+}
+
+// ═══════════════════════════════════════════════════
+// IMAGE LOADING
+// ═══════════════════════════════════════════════════
+function loadFiles(files, dropX, dropY) {
+  Array.from(files).forEach((f, i) => {
+    if (!f.type.startsWith('image/')) return;
+    const rd = new FileReader();
+    rd.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const ar = img.width / img.height;
+        const w = Math.min(3, S.canvas.w - S.margin * 2);
+        const h = w / ar;
+        const x = dropX != null ? p2i(dropX) : S.margin + i * 0.2;
+        const y = dropY != null ? p2i(dropY) : S.margin + S.panels.length * (h + S.gutter);
+        addPanel({ x: snap(x), y: snap(y), w: rnd(w), h: rnd(h), fileName: f.name, imgData: e.target.result, ar });
+      };
+      img.src = e.target.result;
+    };
+    rd.readAsDataURL(f);
+  });
+}
+function loadIntoPanel(pid, file) {
+  const p = findP(pid); if (!p || !file.type.startsWith('image/')) return;
+  saveHist();
+  const rd = new FileReader();
+  rd.onload = (e) => {
+    const img = new Image();
+    img.onload = () => { p.fileName = file.name; p.imgData = e.target.result; p.ar = img.width / img.height; renderAll(); };
+    img.src = e.target.result;
+  };
+  rd.readAsDataURL(file);
+}
+
+// ═══════════════════════════════════════════════════
+// DRAG & DROP ON CANVAS
+// ═══════════════════════════════════════════════════
+canvasArea.addEventListener('dragover', e => { e.preventDefault(); canvas.classList.add('drop-over'); });
+canvasArea.addEventListener('dragleave', () => canvas.classList.remove('drop-over'));
+canvasArea.addEventListener('drop', e => {
+  e.preventDefault(); canvas.classList.remove('drop-over');
+  if (e.dataTransfer.files.length) {
+    const r = canvas.getBoundingClientRect();
+    loadFiles(e.dataTransfer.files, e.clientX - r.left, e.clientY - r.top);
+  }
+});
+
+// ═══════════════════════════════════════════════════
+// MOUSE INTERACTIONS
+// ═══════════════════════════════════════════════════
+canvas.addEventListener('mousedown', e => {
+  const tgt = e.target.closest('.panel, .ann');
+
+  // Click empty canvas -> deselect
+  if (!tgt) { S.sel.clear(); S.selType = null; renderAll(); return; }
+
+  const id = parseInt(tgt.dataset.id);
+  const kind = tgt.dataset.kind;
+
+  // Resize handle?
+  if (e.target.classList.contains('rh')) {
+    const p = findP(id); if (!p) return;
+    S.sel.clear(); S.sel.add(id); S.selType = 'panel';
+    dragSt = { type: 'resize', id, handle: e.target.dataset.handle,
+      mx: e.clientX, my: e.clientY, sx: p.x, sy: p.y, sw: p.w, sh: p.h };
+    saveHist(); renderAll(); e.preventDefault(); return;
+  }
+
+  // Selection
+  if (e.shiftKey) {
+    if (S.sel.has(id)) S.sel.delete(id); else S.sel.add(id);
+  } else if (!S.sel.has(id)) {
+    S.sel.clear(); S.sel.add(id);
+  }
+  S.selType = kind === 'panel' ? 'panel' : 'ann';
+  if (selectedPanels().length && selectedAnns().length) S.selType = 'mixed';
+
+  // Start drag (move all selected items of same kind)
+  const item = kind === 'panel' ? findP(id) : findA(id);
+  if (item) {
+    dragSt = { type: 'move', id, kind, mx: e.clientX, my: e.clientY,
+      starts: {} };
+    // Record start positions for all selected items
+    S.sel.forEach(sid => {
+      const it = findP(sid) || findA(sid);
+      if (it) dragSt.starts[sid] = { x: it.x, y: it.y };
+    });
+    saveHist();
+  }
+  renderAll(); e.preventDefault();
+});
+
+document.addEventListener('mousemove', e => {
+  if (!dragSt) return;
+  const dx = p2i(e.clientX - dragSt.mx);
+  const dy = p2i(e.clientY - dragSt.my);
+
+  if (dragSt.type === 'move') {
+    S.sel.forEach(sid => {
+      const it = findP(sid) || findA(sid);
+      const st = dragSt.starts[sid];
+      if (it && st) {
+        it.x = snap(Math.max(0, st.x + dx));
+        it.y = snap(Math.max(0, st.y + dy));
+      }
+    });
+    renderAll();
+  } else if (dragSt.type === 'resize') {
+    const p = findP(dragSt.id); if (!p) return;
+    const h = dragSt.handle;
+    let nx = dragSt.sx, ny = dragSt.sy, nw = dragSt.sw, nh = dragSt.sh;
+    if (h.includes('e')) nw = Math.max(.25, dragSt.sw + dx);
+    if (h.includes('w')) { nw = Math.max(.25, dragSt.sw - dx); nx = dragSt.sx + dx; }
+    if (h.includes('s')) nh = Math.max(.25, dragSt.sh + dy);
+    if (h.includes('n')) { nh = Math.max(.25, dragSt.sh - dy); ny = dragSt.sy + dy; }
+    if (p.lockAR && p.ar) {
+      if (h==='e'||h==='w') nh = nw / p.ar;
+      else if (h==='n'||h==='s') nw = nh * p.ar;
+      else nh = nw / p.ar;
+    }
+    p.x = snap(Math.max(0, nx)); p.y = snap(Math.max(0, ny));
+    p.w = snap(Math.max(.25, nw)); p.h = snap(Math.max(.25, nh));
+    renderAll();
+  }
+});
+
+document.addEventListener('mouseup', () => { dragSt = null; });
+
+// Double-click annotation to edit
+canvas.addEventListener('dblclick', e => {
+  const el = e.target.closest('.ann'); if (!el) return;
+  const id = parseInt(el.dataset.id);
+  const a = findA(id); if (!a) return;
+  el.classList.add('editing');
+  const txt = el.querySelector('.atxt');
+  txt.contentEditable = true; txt.focus();
+  const range = document.createRange(); range.selectNodeContents(txt);
+  window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+  const done = () => {
+    txt.contentEditable = false; el.classList.remove('editing');
+    a.text = txt.textContent.trim() || 'Note';
+    txt.removeEventListener('blur', done); txt.removeEventListener('keydown', onK);
+    updatePrompt();
+  };
+  const onK = e => { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();done();} if(e.key==='Escape')done(); };
+  txt.addEventListener('blur', done); txt.addEventListener('keydown', onK);
+});
+
+// ═══════════════════════════════════════════════════
+// ALIGNMENT & DISTRIBUTION
+// ═══════════════════════════════════════════════════
+function alignItems(dir) {
+  const ps = selectedPanels(); if (ps.length < 2) return;
+  saveHist();
+  if (dir === 'left') { const v = Math.min(...ps.map(p=>p.x)); ps.forEach(p=>p.x=v); }
+  if (dir === 'right') { const v = Math.max(...ps.map(p=>p.x+p.w)); ps.forEach(p=>p.x=v-p.w); }
+  if (dir === 'top') { const v = Math.min(...ps.map(p=>p.y)); ps.forEach(p=>p.y=v); }
+  if (dir === 'bottom') { const v = Math.max(...ps.map(p=>p.y+p.h)); ps.forEach(p=>p.y=v-p.h); }
+  if (dir === 'centerH') { const v = ps.reduce((s,p)=>s+p.x+p.w/2,0)/ps.length; ps.forEach(p=>p.x=rnd(v-p.w/2)); }
+  if (dir === 'centerV') { const v = ps.reduce((s,p)=>s+p.y+p.h/2,0)/ps.length; ps.forEach(p=>p.y=rnd(v-p.h/2)); }
+  renderAll();
+}
+
+function distribute(dir) {
+  const ps = selectedPanels(); if (ps.length < 3) return;
+  saveHist();
+  if (dir === 'h') {
+    ps.sort((a,b) => a.x - b.x);
+    const minX = ps[0].x, maxR = ps[ps.length-1].x + ps[ps.length-1].w;
+    const totalW = ps.reduce((s,p)=>s+p.w, 0);
+    const gap = (maxR - minX - totalW) / (ps.length - 1);
+    let cx = minX;
+    ps.forEach(p => { p.x = rnd(cx); cx += p.w + gap; });
+  } else {
+    ps.sort((a,b) => a.y - b.y);
+    const minY = ps[0].y, maxB = ps[ps.length-1].y + ps[ps.length-1].h;
+    const totalH = ps.reduce((s,p)=>s+p.h, 0);
+    const gap = (maxB - minY - totalH) / (ps.length - 1);
+    let cy = minY;
+    ps.forEach(p => { p.y = rnd(cy); cy += p.h + gap; });
+  }
+  renderAll();
+}
+
+function matchSize(dim) {
+  const ps = selectedPanels(); if (ps.length < 2) return;
+  saveHist();
+  const ref = ps[0];
+  if (dim === 'w') ps.forEach(p => p.w = ref.w);
+  else ps.forEach(p => p.h = ref.h);
+  renderAll();
+}
+
+// ═══════════════════════════════════════════════════
+// TOOLBAR BUTTONS
+// ═══════════════════════════════════════════════════
+$('btnAdd').onclick = () => addPanel();
+$('btnImg').onclick = () => {
+  const pp = primaryPanel();
+  fileTarget = pp ? pp.id : 'new';
+  fileInput.click();
+};
+$('btnRepl').onclick = () => {
+  const pp = primaryPanel(); if (pp) { fileTarget = pp.id; fileInput.click(); }
+};
+$('btnAnnPanel').onclick = () => addAnnotation('panel');
+$('btnAnnGlobal').onclick = () => addAnnotation('global');
+$('btnDel').onclick = deleteSelected;
+$('btnUndo').onclick = undo;
+$('btnDup').onclick = duplicateSelected;
+$('btnFwd').onclick = () => {
+  S.sel.forEach(id => { const it = findP(id)||findA(id); if (it) it.z = (it.z||1)+1; });
+  renderAll();
+};
+$('btnBack').onclick = () => {
+  S.sel.forEach(id => { const it = findP(id)||findA(id); if (it) it.z = Math.max(1,(it.z||1)-1); });
+  renderAll();
+};
+
+fileInput.addEventListener('change', e => {
+  if (!e.target.files.length) return;
+  if (fileTarget === 'new' || !fileTarget) loadFiles(e.target.files);
+  else loadIntoPanel(fileTarget, e.target.files[0]);
+  fileInput.value = ''; fileTarget = null;
+});
+
+function deleteSelected() {
+  if (!S.sel.size) return;
+  saveHist();
+  S.sel.forEach(id => {
+    S.panels = S.panels.filter(p => p.id !== id);
+    S.annotations = S.annotations.filter(a => a.id !== id);
+  });
+  S.sel.clear(); S.selType = null; renderAll();
+}
+
+function duplicateSelected() {
+  const ps = selectedPanels();
+  if (!ps.length) return;
+  saveHist();
+  S.sel.clear();
+  ps.forEach(p => {
+    const np = { ...p, id: S.nextId++, label: nextLbl(), x: rnd(p.x + 0.3), y: rnd(p.y + 0.3), desc: p.desc };
+    S.panels.push(np);
+    S.sel.add(np.id);
+  });
+  S.selType = 'panel';
+  renderAll();
+}
+
+// ═══════════════════════════════════════════════════
+// SIDEBAR CONTROLS
+// ═══════════════════════════════════════════════════
+// Journal dropdown
+const selJ = $('selJournal');
+Object.keys(JOURNALS).forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = k; selJ.appendChild(o); });
+selJ.onchange = function() { applyJournal(this.value); };
+
+// Canvas
+$('inpCW').onchange = function() { S.canvas.w = parseFloat(this.value)||7; updateCanvas(); renderAll(); };
+$('inpCH').onchange = function() { S.canvas.h = parseFloat(this.value)||10; updateCanvas(); renderAll(); };
+$('inpZoom').oninput = function() {
+  S.zoom = parseInt(this.value);
+  $('zoomLbl').textContent = S.zoom+'%'; $('zoomBadge').textContent = S.zoom+'%';
+  updateCanvas(); renderAll();
+};
+
+// Grid
+$('chkGrid').onchange = function() { S.grid.show = this.checked; drawGrid(); };
+$('chkSnap').onchange = function() { S.grid.snap = this.checked; };
+$('inpGrid').onchange = function() { S.grid.size = parseFloat(this.value)||.25; drawGrid(); };
+$('inpGutter').onchange = function() { S.gutter = parseFloat(this.value)||.15; };
+$('inpMargin').onchange = function() { S.margin = parseFloat(this.value)||.25; };
+
+// Labels
+$('chkLabels').onchange = function() { S.labels.show = this.checked; renderAll(); };
+$('chkBold').onchange = function() { S.labels.bold = this.checked; renderAll(); };
+$('inpLblSz').onchange = function() { S.labels.size = parseInt(this.value)||8; renderAll(); };
+$('selCase').onchange = function() { S.labels.case = this.value; S.panels.forEach(p=>p.label=fmtLbl(p.label)); renderAll(); };
+
+// Font
+$('selFont').onchange = function() { S.font.family = this.value; updatePrompt(); };
+$('inpAxisSz').onchange = function() { S.font.axisPt = parseFloat(this.value)||7; updatePrompt(); };
+$('inpTickSz').onchange = function() { S.font.tickPt = parseFloat(this.value)||6; updatePrompt(); };
+$('inpTitleSz').onchange = function() { S.font.titlePt = parseFloat(this.value)||7; updatePrompt(); };
+
+// Output lang
+$('selLang').onchange = function() { S.outputLang = this.value; updatePrompt(); };
+
+// Panel props
+$('inpPLbl').oninput = function() { const p = primaryPanel(); if (p) { p.label = this.value; renderAll(); } };
+$('selPType').onchange = function() { const p = primaryPanel(); if (p) { p.type = this.value; renderAll(); } };
+['inpPX','inpPY','inpPW','inpPH'].forEach(id => {
+  $(id).onchange = function() {
+    const p = primaryPanel(); if (!p) return;
+    saveHist();
+    const k = {inpPX:'x',inpPY:'y',inpPW:'w',inpPH:'h'}[id];
+    p[k] = parseFloat(this.value)||0;
+    renderAll();
+  };
+});
+$('chkLock').onchange = function() {
+  const p = primaryPanel(); if (p) { p.lockAR = this.checked; if (this.checked && !p.ar) p.ar = p.w/p.h; }
+};
+$('inpPDesc').onchange = function() { const p = primaryPanel(); if (p) { p.desc = this.value; updatePrompt(); } };
+
+// Ann props
+['inpAX','inpAY'].forEach(id => {
+  $(id).onchange = function() {
+    const a = primaryAnn(); if (!a) return; saveHist();
+    const k = {inpAX:'x',inpAY:'y'}[id]; a[k] = parseFloat(this.value)||0; renderAll();
+  };
+});
+
+// Copy
+$('btnCopy').onclick = function() {
+  navigator.clipboard.writeText($('promptOut').value).then(() => {
+    this.textContent = 'Copied!'; this.classList.add('copied');
+    setTimeout(() => { this.textContent = 'Copy Spec'; this.classList.remove('copied'); }, 1500);
+  });
+};
+
+// ═══════════════════════════════════════════════════
+// PROMPT / SPEC GENERATION
+// ═══════════════════════════════════════════════════
+function updatePrompt() {
+  const j = JOURNALS[S.journal] || {};
+  const spec = {
+    journal: S.journal,
+    output_format: S.outputLang,
+    canvas: { width_inches: rnd(S.canvas.w), height_inches: rnd(S.canvas.h) },
+    panels: S.panels.map(p => ({
+      label: fmtLbl(p.label),
+      type: p.type,
+      description: p.desc || '',
+      preview_file: p.fileName || null,
+      x_inches: rnd(p.x), y_inches: rnd(p.y),
+      width_inches: rnd(p.w), height_inches: rnd(p.h),
+    })),
+    annotations: S.annotations.map(a => ({
+      text: a.text,
+      type: a.kind,
+      attached_to_panel: a.kind === 'panel' && a.panelId ? (findP(a.panelId)||{}).label || null : null,
+      x_inches: rnd(a.x), y_inches: rnd(a.y),
+    })),
+    font_spec: {
+      family: S.font.family,
+      panel_label_pt: S.labels.size,
+      panel_label_bold: S.labels.bold,
+      panel_label_case: S.labels.case,
+      axis_label_pt: S.font.axisPt,
+      tick_label_pt: S.font.tickPt,
+      title_pt: S.font.titlePt,
+    },
+    constraints: {
+      min_line_weight_pt: j.minLineWt || 0.5,
+      min_dpi: j.minDPI || 300,
+      color_mode: j.colorMode || 'RGB',
+      colorblind_safe: j.colorblind !== false,
+      file_format: 'PDF (vector)',
+    },
+  };
+
+  // Natural language prompt
+  const lang = S.outputLang;
+  const lines = [];
+  lines.push(`Generate ${lang} code that produces an editable vector PDF composite figure.`);
+  lines.push(`Target journal: ${S.journal}. Canvas: ${spec.canvas.width_inches}" wide x ${spec.canvas.height_inches}" tall.`);
+  lines.push('');
+
+  if (spec.panels.length) {
+    lines.push(`Panels (${spec.panels.length}):`);
+    spec.panels.forEach(p => {
+      const typeStr = p.type === 'image' ? '[IMAGE - embed directly]' : '[PLOT - generate from data]';
+      lines.push(`  ${p.label}: ${typeStr} at (${p.x_inches}", ${p.y_inches}"), size ${p.width_inches}" x ${p.height_inches}"`);
+      if (p.description) lines.push(`      Description: ${p.description}`);
+      if (p.preview_file) lines.push(`      Preview ref: ${p.preview_file}`);
+    });
+    lines.push('');
+  }
+
+  if (spec.annotations.length) {
+    lines.push('Notes/Instructions:');
+    spec.annotations.forEach(a => {
+      const prefix = a.type === 'panel' && a.attached_to_panel ? `[Panel ${a.attached_to_panel}]` : '[Global]';
+      lines.push(`  ${prefix} ${a.text}`);
+    });
+    lines.push('');
+  }
+
+  lines.push('Font spec:');
+  lines.push(`  Family: ${spec.font_spec.family}, Labels: ${spec.font_spec.panel_label_pt}pt ${spec.font_spec.panel_label_bold?'bold':''} ${spec.font_spec.panel_label_case}`);
+  lines.push(`  Axis labels: ${spec.font_spec.axis_label_pt}pt, Tick labels: ${spec.font_spec.tick_label_pt}pt, Titles: ${spec.font_spec.title_pt}pt`);
+  lines.push('');
+  lines.push('Constraints:');
+  lines.push(`  Min line weight: ${spec.constraints.min_line_weight_pt}pt, DPI: ${spec.constraints.min_dpi}+, Color: ${spec.constraints.color_mode}, Colorblind-safe: ${spec.constraints.colorblind_safe}`);
+  lines.push(`  Output: ${spec.constraints.file_format}`);
+  lines.push('');
+  lines.push('JSON spec:');
+  lines.push(JSON.stringify(spec, null, 2));
+
+  $('promptOut').value = lines.join('\n');
+}
+
+// ═══════════════════════════════════════════════════
+// KEYBOARD SHORTCUTS
+// ═══════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (e.target.isContentEditable || e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA' || e.target.tagName==='SELECT') {
+    if (e.key==='Escape') e.target.blur();
+    return;
+  }
+  const cmd = e.metaKey || e.ctrlKey;
+  if (cmd && e.key==='z') { e.preventDefault(); undo(); }
+  if (cmd && e.key==='d') { e.preventDefault(); duplicateSelected(); }
+  if (cmd && e.key==='a') { e.preventDefault(); S.panels.forEach(p=>S.sel.add(p.id)); S.selType='panel'; renderAll(); }
+  if (e.key==='Delete'||e.key==='Backspace') { e.preventDefault(); deleteSelected(); }
+  if (e.key==='Escape') {
+    if ($('helpOverlay').classList.contains('open')) { toggleHelp(); return; }
+    S.sel.clear(); S.selType=null; renderAll();
+  }
+  if (e.key==='?') { e.preventDefault(); toggleHelp(); }
+
+  // Arrow nudge
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && S.sel.size) {
+    e.preventDefault();
+    const step = e.shiftKey ? 0.01 : S.grid.size;
+    S.sel.forEach(id => {
+      const it = findP(id)||findA(id); if (!it) return;
+      if (e.key==='ArrowLeft') it.x = Math.max(0, it.x - step);
+      if (e.key==='ArrowRight') it.x += step;
+      if (e.key==='ArrowUp') it.y = Math.max(0, it.y - step);
+      if (e.key==='ArrowDown') it.y += step;
+      it.x = rnd(it.x); it.y = rnd(it.y);
+    });
+    renderAll();
+  }
+});
+
+// ═══════════════════════════════════════════════════
+// PRESETS
+// ═══════════════════════════════════════════════════
+function applyPreset(type) {
+  saveHist();
+  S.panels = []; S.annotations = []; S.nextLbl = 0;
+  S.sel.clear(); S.selType = null;
+  const m = S.margin, g = S.gutter, cw = S.canvas.w, ch = S.canvas.h;
+
+  if (type === '2x1') {
+    const pw = rnd((cw - 2*m - g) / 2), ph = rnd(pw * .75);
+    addPanel({ x:m, y:m, w:pw, h:ph });
+    addPanel({ x:rnd(m+pw+g), y:m, w:pw, h:ph });
+  } else if (type === '2x2') {
+    const pw = rnd((cw - 2*m - g) / 2), ph = rnd(pw * .75);
+    addPanel({ x:m, y:m, w:pw, h:ph });
+    addPanel({ x:rnd(m+pw+g), y:m, w:pw, h:ph });
+    addPanel({ x:m, y:rnd(m+ph+g), w:pw, h:ph });
+    addPanel({ x:rnd(m+pw+g), y:rnd(m+ph+g), w:pw, h:ph });
+  } else if (type === '3x2') {
+    const pw = rnd((cw - 2*m - g) / 2), ph = rnd(pw * .65);
+    for (let r=0;r<3;r++) for (let c=0;c<2;c++)
+      addPanel({ x:rnd(m+c*(pw+g)), y:rnd(m+r*(ph+g)), w:pw, h:ph });
+  } else if (type === '1over2') {
+    const fw = rnd(cw - 2*m), hw = rnd((fw-g)/2);
+    const th = rnd(fw*.45), bh = rnd(hw*.75);
+    addPanel({ x:m, y:m, w:fw, h:th });
+    addPanel({ x:m, y:rnd(m+th+g), w:hw, h:bh });
+    addPanel({ x:rnd(m+hw+g), y:rnd(m+th+g), w:hw, h:bh });
+  } else if (type === 'clear') { S.nextLbl = 0; }
+  S.sel.clear(); S.selType = null;
+  renderAll();
+}
+
+// ═══════════════════════════════════════════════════
+// HELP MODAL
+// ═══════════════════════════════════════════════════
+function toggleHelp() {
+  $('helpOverlay').classList.toggle('open');
+}
+$('btnHelp').onclick = toggleHelp;
+$('helpClose').onclick = toggleHelp;
+$('helpOverlay').addEventListener('click', e => { if (e.target === $('helpOverlay')) toggleHelp(); });
+
+// ═══════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════
+syncSidebar();
+buildColBtns();
+renderAll();
+</script>
+</body>
+</html>

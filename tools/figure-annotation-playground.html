@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Figure Annotation Playground</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Header */
+  .header { background: #16213e; padding: 8px 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+  .header h1 { font-size: 14px; font-weight: 600; color: #e94560; margin-right: 16px; white-space: nowrap; }
+  .tool-group { display: flex; gap: 4px; }
+  .tool-btn { padding: 6px 14px; border: 1px solid #0f3460; border-radius: 4px; background: #1a1a2e; color: #ccc; cursor: pointer; font-size: 12px; transition: all 0.15s; }
+  .tool-btn:hover { background: #0f3460; color: #fff; }
+  .tool-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
+  .separator { width: 1px; height: 24px; background: #0f3460; }
+  .color-dot { width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: border-color 0.15s; }
+  .color-dot:hover, .color-dot.active { border-color: #fff; }
+  .header-spacer { flex: 1; }
+  .file-label { padding: 6px 14px; border: 1px dashed #0f3460; border-radius: 4px; background: transparent; color: #aaa; cursor: pointer; font-size: 12px; }
+  .file-label:hover { border-color: #e94560; color: #e94560; }
+  #file-input { display: none; }
+  .img-name { font-size: 11px; color: #888; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Main layout */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Canvas area */
+  .canvas-area { flex: 1; position: relative; overflow: hidden; background: #111; cursor: crosshair; }
+  .canvas-area.tool-select { cursor: default; }
+  .canvas-area.tool-arrow { cursor: crosshair; }
+  .canvas-area.panning { cursor: grabbing; }
+  .canvas-inner { position: absolute; transform-origin: 0 0; }
+  .canvas-inner img { display: block; user-select: none; -webkit-user-drag: none; }
+  .drop-zone { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: #555; font-size: 14px; }
+  .drop-zone svg { opacity: 0.3; }
+  .drop-zone.hidden { display: none; }
+
+  /* Annotations on canvas */
+  .note-marker { position: absolute; transform: translate(-12px, -28px); cursor: pointer; z-index: 10; pointer-events: all; }
+  .note-pin { width: 24px; height: 28px; position: relative; }
+  .note-pin-head { width: 24px; height: 24px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #333; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+  .note-pin-head span { transform: rotate(45deg); }
+  .note-marker:hover .note-pin-head { filter: brightness(1.15); }
+  .note-marker.selected .note-pin-head { box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,0.5); }
+
+  .arrow-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+  .arrow-overlay svg { width: 100%; height: 100%; }
+  .arrow-line { stroke-width: 2.5; cursor: pointer; pointer-events: stroke; }
+  .arrow-line:hover { stroke-width: 4; }
+  .arrow-label { font-size: 11px; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 3px; pointer-events: none; }
+  .arrow-temp { stroke-dasharray: 6 4; opacity: 0.7; }
+
+  /* Zoom controls */
+  .zoom-controls { position: absolute; bottom: 12px; left: 12px; display: flex; gap: 4px; z-index: 20; }
+  .zoom-btn { width: 32px; height: 32px; border-radius: 4px; border: 1px solid #333; background: rgba(26,26,46,0.9); color: #ccc; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; }
+  .zoom-btn:hover { background: #0f3460; color: #fff; }
+  .zoom-level { font-size: 11px; color: #888; padding: 0 8px; line-height: 32px; }
+
+  /* Right panel */
+  .panel { width: 320px; background: #16213e; border-left: 1px solid #0f3460; display: flex; flex-direction: column; flex-shrink: 0; }
+  .panel-header { padding: 10px 12px; border-bottom: 1px solid #0f3460; display: flex; justify-content: space-between; align-items: center; }
+  .panel-header h2 { font-size: 13px; font-weight: 600; }
+  .panel-count { font-size: 11px; color: #888; }
+  .clear-btn { font-size: 11px; color: #e94560; cursor: pointer; background: none; border: none; }
+  .clear-btn:hover { text-decoration: underline; }
+
+  .annotation-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .annotation-list::-webkit-scrollbar { width: 6px; }
+  .annotation-list::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+  .ann-card { background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; padding: 10px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s; }
+  .ann-card:hover { border-color: #e94560; }
+  .ann-card.selected { border-color: #e94560; background: rgba(233,69,96,0.08); }
+  .ann-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .ann-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px; text-transform: uppercase; }
+  .ann-pos { font-size: 10px; color: #888; }
+  .ann-delete { background: none; border: none; color: #666; cursor: pointer; font-size: 14px; padding: 2px 4px; }
+  .ann-delete:hover { color: #e94560; }
+  .ann-text { width: 100%; background: #111; border: 1px solid #333; border-radius: 3px; color: #e0e0e0; padding: 6px 8px; font-size: 12px; font-family: inherit; resize: vertical; min-height: 36px; }
+  .ann-text:focus { outline: none; border-color: #e94560; }
+  .ann-text::placeholder { color: #555; }
+
+  /* Prompt output */
+  .prompt-area { border-top: 1px solid #0f3460; padding: 10px 12px; background: #111; }
+  .prompt-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .prompt-bar span { font-size: 11px; color: #888; }
+  .copy-btn { padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px; background: #16213e; color: #ccc; cursor: pointer; font-size: 11px; }
+  .copy-btn:hover { background: #e94560; color: #fff; border-color: #e94560; }
+  .copy-btn.copied { background: #1a7f37; border-color: #1a7f37; }
+  .prompt-text { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; color: #aaa; max-height: 120px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
+  .prompt-text::-webkit-scrollbar { width: 4px; }
+  .prompt-text::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Figure Annotator</h1>
+  <div class="tool-group">
+    <button class="tool-btn active" data-tool="note" title="Place sticky note">&#x1F4CC; Note</button>
+    <button class="tool-btn" data-tool="arrow" title="Draw arrow">&#x2197; Arrow</button>
+    <button class="tool-btn" data-tool="select" title="Select &amp; move">&#x25CB; Select</button>
+  </div>
+  <div class="separator"></div>
+  <div class="tool-group" id="color-picker">
+    <div class="color-dot active" data-color="yellow" style="background:#fbbf24;" title="Default"></div>
+    <div class="color-dot" data-color="red" style="background:#ef4444;" title="Urgent"></div>
+    <div class="color-dot" data-color="blue" style="background:#3b82f6;" title="Suggestion"></div>
+    <div class="color-dot" data-color="green" style="background:#22c55e;" title="Approval"></div>
+  </div>
+  <div class="header-spacer"></div>
+  <span class="img-name" id="img-name">No image loaded</span>
+  <label class="file-label" for="file-input">Load Image</label>
+  <input type="file" id="file-input" accept="image/*">
+</div>
+
+<div class="main">
+  <div class="canvas-area" id="canvas-area">
+    <div class="drop-zone" id="drop-zone">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      <span>Drop a figure PNG here or click "Load Image"</span>
+    </div>
+    <div class="canvas-inner" id="canvas-inner"></div>
+    <div class="arrow-overlay" id="arrow-overlay"><svg id="arrow-svg"></svg></div>
+    <div class="zoom-controls">
+      <button class="zoom-btn" id="zoom-out">−</button>
+      <span class="zoom-level" id="zoom-level">100%</span>
+      <button class="zoom-btn" id="zoom-in">+</button>
+      <button class="zoom-btn" id="zoom-fit" title="Fit to view">⊡</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <div><h2>Annotations</h2> <span class="panel-count" id="ann-count">0 items</span></div>
+      <button class="clear-btn" id="clear-all">Clear All</button>
+    </div>
+    <div class="annotation-list" id="ann-list"></div>
+    <div class="prompt-area">
+      <div class="prompt-bar">
+        <span>Feedback Output</span>
+        <button class="copy-btn" id="copy-btn">Copy Feedback</button>
+      </div>
+      <div class="prompt-text" id="prompt-output">Add annotations to generate feedback...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLORS = {
+  yellow: { bg: '#fbbf24', label: 'default' },
+  red:    { bg: '#ef4444', label: 'urgent' },
+  blue:   { bg: '#3b82f6', label: 'suggestion' },
+  green:  { bg: '#22c55e', label: 'approval' }
+};
+
+const state = {
+  tool: 'note',
+  color: 'yellow',
+  annotations: [],
+  nextId: 1,
+  selectedId: null,
+  zoom: 1,
+  panX: 0, panY: 0,
+  imgW: 0, imgH: 0,
+  imgName: '',
+  // Arrow drag state
+  arrowDragging: false,
+  arrowStart: null,
+  // Pan state
+  panning: false,
+  panStartX: 0, panStartY: 0, panStartPanX: 0, panStartPanY: 0,
+  // Note drag state
+  draggingNote: null, dragOffsetX: 0, dragOffsetY: 0
+};
+
+const canvasArea = document.getElementById('canvas-area');
+const canvasInner = document.getElementById('canvas-inner');
+const arrowOverlay = document.getElementById('arrow-overlay');
+const arrowSvg = document.getElementById('arrow-svg');
+const dropZone = document.getElementById('drop-zone');
+const annList = document.getElementById('ann-list');
+const annCount = document.getElementById('ann-count');
+const promptOutput = document.getElementById('prompt-output');
+const imgNameEl = document.getElementById('img-name');
+
+// --- Tool selection ---
+document.querySelectorAll('.tool-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.tool = btn.dataset.tool;
+    canvasArea.className = 'canvas-area tool-' + state.tool;
+  });
+});
+
+// --- Color selection ---
+document.querySelectorAll('.color-dot').forEach(dot => {
+  dot.addEventListener('click', () => {
+    document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
+    dot.classList.add('active');
+    state.color = dot.dataset.color;
+  });
+});
+
+// --- File loading ---
+document.getElementById('file-input').addEventListener('change', e => {
+  if (e.target.files[0]) loadImage(e.target.files[0]);
+});
+
+canvasArea.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+canvasArea.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) loadImage(file);
+});
+
+function loadImage(file) {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      state.imgW = img.naturalWidth;
+      state.imgH = img.naturalHeight;
+      state.imgName = file.name;
+      imgNameEl.textContent = file.name;
+      canvasInner.innerHTML = '';
+      canvasInner.appendChild(img);
+      dropZone.classList.add('hidden');
+      fitToView();
+      renderAll();
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// --- Zoom & Pan ---
+function fitToView() {
+  const rect = canvasArea.getBoundingClientRect();
+  const scaleX = (rect.width - 20) / state.imgW;
+  const scaleY = (rect.height - 20) / state.imgH;
+  state.zoom = Math.min(scaleX, scaleY, 2);
+  state.panX = (rect.width - state.imgW * state.zoom) / 2;
+  state.panY = (rect.height - state.imgH * state.zoom) / 2;
+  applyTransform();
+}
+
+function applyTransform() {
+  canvasInner.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+  arrowOverlay.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+  arrowOverlay.style.width = state.imgW + 'px';
+  arrowOverlay.style.height = state.imgH + 'px';
+  document.getElementById('zoom-level').textContent = Math.round(state.zoom * 100) + '%';
+}
+
+document.getElementById('zoom-in').addEventListener('click', () => { state.zoom = Math.min(state.zoom * 1.25, 5); applyTransform(); renderMarkers(); });
+document.getElementById('zoom-out').addEventListener('click', () => { state.zoom = Math.max(state.zoom / 1.25, 0.1); applyTransform(); renderMarkers(); });
+document.getElementById('zoom-fit').addEventListener('click', () => { fitToView(); renderMarkers(); });
+
+// Mouse wheel zoom
+canvasArea.addEventListener('wheel', e => {
+  if (!state.imgW) return;
+  e.preventDefault();
+  const rect = canvasArea.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const oldZoom = state.zoom;
+  const factor = e.deltaY < 0 ? 1.1 : 1/1.1;
+  state.zoom = Math.max(0.1, Math.min(5, state.zoom * factor));
+  // Zoom toward cursor
+  state.panX = mx - (mx - state.panX) * (state.zoom / oldZoom);
+  state.panY = my - (my - state.panY) * (state.zoom / oldZoom);
+  applyTransform();
+  renderMarkers();
+}, { passive: false });
+
+// --- Canvas interactions ---
+function canvasToImg(clientX, clientY) {
+  const rect = canvasArea.getBoundingClientRect();
+  const x = (clientX - rect.left - state.panX) / state.zoom;
+  const y = (clientY - rect.top - state.panY) / state.zoom;
+  return { x, y };
+}
+
+function imgToPercent(x, y) {
+  return {
+    xp: Math.round((x / state.imgW) * 1000) / 10,
+    yp: Math.round((y / state.imgH) * 1000) / 10
+  };
+}
+
+canvasArea.addEventListener('mousedown', e => {
+  if (!state.imgW || e.target.closest('.zoom-controls')) return;
+
+  // Middle-click or space+click for panning
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    state.panning = true;
+    state.panStartX = e.clientX;
+    state.panStartY = e.clientY;
+    state.panStartPanX = state.panX;
+    state.panStartPanY = state.panY;
+    canvasArea.classList.add('panning');
+    e.preventDefault();
+    return;
+  }
+
+  if (e.button !== 0) return;
+  const pos = canvasToImg(e.clientX, e.clientY);
+  if (pos.x < 0 || pos.y < 0 || pos.x > state.imgW || pos.y > state.imgH) return;
+
+  if (state.tool === 'note') {
+    const ann = { id: state.nextId++, type: 'note', x: pos.x, y: pos.y, color: state.color, text: '' };
+    state.annotations.push(ann);
+    state.selectedId = ann.id;
+    renderAll();
+    // Focus the text field
+    const tf = document.querySelector(`.ann-card[data-id="${ann.id}"] .ann-text`);
+    if (tf) tf.focus();
+  } else if (state.tool === 'arrow') {
+    state.arrowDragging = true;
+    state.arrowStart = pos;
+  } else if (state.tool === 'select') {
+    // Deselect
+    state.selectedId = null;
+    renderAll();
+  }
+});
+
+canvasArea.addEventListener('mousemove', e => {
+  if (state.panning) {
+    state.panX = state.panStartPanX + (e.clientX - state.panStartX);
+    state.panY = state.panStartPanY + (e.clientY - state.panStartY);
+    applyTransform();
+    renderMarkers();
+    return;
+  }
+  if (state.arrowDragging) {
+    const pos = canvasToImg(e.clientX, e.clientY);
+    renderArrows(pos);
+  }
+});
+
+canvasArea.addEventListener('mouseup', e => {
+  if (state.panning) {
+    state.panning = false;
+    canvasArea.classList.remove('panning');
+    return;
+  }
+  if (state.arrowDragging) {
+    state.arrowDragging = false;
+    const pos = canvasToImg(e.clientX, e.clientY);
+    const dx = pos.x - state.arrowStart.x;
+    const dy = pos.y - state.arrowStart.y;
+    if (Math.sqrt(dx*dx + dy*dy) > 10) {
+      const ann = { id: state.nextId++, type: 'arrow', x1: state.arrowStart.x, y1: state.arrowStart.y, x2: pos.x, y2: pos.y, text: '' };
+      state.annotations.push(ann);
+      state.selectedId = ann.id;
+      renderAll();
+      const tf = document.querySelector(`.ann-card[data-id="${ann.id}"] .ann-text`);
+      if (tf) tf.focus();
+    } else {
+      renderArrows();
+    }
+    state.arrowStart = null;
+  }
+});
+
+// --- Rendering ---
+function renderAll() {
+  renderMarkers();
+  renderArrows();
+  renderList();
+  updatePrompt();
+}
+
+function renderMarkers() {
+  // Remove old markers
+  canvasInner.querySelectorAll('.note-marker').forEach(m => m.remove());
+  const notes = state.annotations.filter(a => a.type === 'note');
+  for (const n of notes) {
+    const el = document.createElement('div');
+    el.className = 'note-marker' + (state.selectedId === n.id ? ' selected' : '');
+    el.dataset.id = n.id;
+    el.style.left = n.x + 'px';
+    el.style.top = n.y + 'px';
+    el.innerHTML = `<div class="note-pin"><div class="note-pin-head" style="background:${COLORS[n.color].bg}"><span>#${state.annotations.indexOf(n)+1}</span></div></div>`;
+    el.addEventListener('mousedown', e => {
+      e.stopPropagation();
+      state.selectedId = n.id;
+      if (state.tool === 'select') {
+        state.draggingNote = n;
+        const pos = canvasToImg(e.clientX, e.clientY);
+        state.dragOffsetX = n.x - pos.x;
+        state.dragOffsetY = n.y - pos.y;
+      }
+      renderAll();
+    });
+    canvasInner.appendChild(el);
+  }
+}
+
+function renderArrows(tempEnd) {
+  let html = '<defs><marker id="ah" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#e94560"/></marker></defs>';
+  const arrows = state.annotations.filter(a => a.type === 'arrow');
+  for (const a of arrows) {
+    const sel = state.selectedId === a.id ? ' style="stroke-width:3.5"' : '';
+    const idx = state.annotations.indexOf(a) + 1;
+    html += `<line class="arrow-line" x1="${a.x1}" y1="${a.y1}" x2="${a.x2}" y2="${a.y2}" stroke="#e94560" marker-end="url(#ah)"${sel} data-id="${a.id}" onclick="selectArrow(${a.id})"/>`;
+    const mx = (a.x1 + a.x2) / 2, my = (a.y1 + a.y2) / 2;
+    if (a.text) {
+      html += `<text class="arrow-label" x="${mx}" y="${my - 6}">${escHtml(a.text)}</text>`;
+    }
+    html += `<text class="arrow-label" x="${a.x1 + 8}" y="${a.y1 - 4}" style="font-size:9px;fill:#e94560">#${idx}</text>`;
+  }
+  if (tempEnd && state.arrowStart) {
+    html += `<line class="arrow-temp" x1="${state.arrowStart.x}" y1="${state.arrowStart.y}" x2="${tempEnd.x}" y2="${tempEnd.y}" stroke="#e94560" marker-end="url(#ah)"/>`;
+  }
+  arrowSvg.innerHTML = html;
+}
+
+window.selectArrow = function(id) {
+  state.selectedId = id;
+  renderAll();
+};
+
+// Note dragging (select mode)
+document.addEventListener('mousemove', e => {
+  if (state.draggingNote) {
+    const pos = canvasToImg(e.clientX, e.clientY);
+    state.draggingNote.x = Math.max(0, Math.min(state.imgW, pos.x + state.dragOffsetX));
+    state.draggingNote.y = Math.max(0, Math.min(state.imgH, pos.y + state.dragOffsetY));
+    renderMarkers();
+    updatePrompt();
+  }
+});
+document.addEventListener('mouseup', () => {
+  if (state.draggingNote) {
+    state.draggingNote = null;
+    renderList();
+  }
+});
+
+function renderList() {
+  annCount.textContent = state.annotations.length + ' item' + (state.annotations.length !== 1 ? 's' : '');
+  let html = '';
+  state.annotations.forEach((a, i) => {
+    const num = i + 1;
+    const selected = state.selectedId === a.id ? ' selected' : '';
+    if (a.type === 'note') {
+      const p = imgToPercent(a.x, a.y);
+      const badgeStyle = `background:${COLORS[a.color].bg};color:#000`;
+      html += `<div class="ann-card${selected}" data-id="${a.id}" onclick="selectAnn(${a.id})">
+        <div class="ann-card-head">
+          <span><span class="ann-badge" style="${badgeStyle}">#${num} Note</span> <span class="ann-pos">(${p.xp}%, ${p.yp}%)</span></span>
+          <button class="ann-delete" onclick="deleteAnn(event,${a.id})">×</button>
+        </div>
+        <textarea class="ann-text" placeholder="Describe what to change..." oninput="updateText(${a.id}, this.value)" onfocus="selectAnn(${a.id})">${escHtml(a.text)}</textarea>
+      </div>`;
+    } else {
+      const p1 = imgToPercent(a.x1, a.y1), p2 = imgToPercent(a.x2, a.y2);
+      html += `<div class="ann-card${selected}" data-id="${a.id}" onclick="selectAnn(${a.id})">
+        <div class="ann-card-head">
+          <span><span class="ann-badge" style="background:#e94560;color:#fff">#${num} Arrow</span> <span class="ann-pos">(${p1.xp}%,${p1.yp}%) → (${p2.xp}%,${p2.yp}%)</span></span>
+          <button class="ann-delete" onclick="deleteAnn(event,${a.id})">×</button>
+        </div>
+        <textarea class="ann-text" placeholder="Label this arrow..." oninput="updateText(${a.id}, this.value)" onfocus="selectAnn(${a.id})">${escHtml(a.text)}</textarea>
+      </div>`;
+    }
+  });
+  annList.innerHTML = html || '<div style="text-align:center;color:#555;padding:24px;font-size:12px">Click on the image to add annotations</div>';
+}
+
+window.selectAnn = function(id) {
+  state.selectedId = id;
+  renderAll();
+  // Scroll card into view
+  const card = document.querySelector(`.ann-card[data-id="${id}"]`);
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
+
+window.deleteAnn = function(e, id) {
+  e.stopPropagation();
+  state.annotations = state.annotations.filter(a => a.id !== id);
+  if (state.selectedId === id) state.selectedId = null;
+  renderAll();
+};
+
+window.updateText = function(id, text) {
+  const ann = state.annotations.find(a => a.id === id);
+  if (ann) { ann.text = text; renderArrows(); updatePrompt(); }
+};
+
+document.getElementById('clear-all').addEventListener('click', () => {
+  if (state.annotations.length && confirm('Clear all annotations?')) {
+    state.annotations = [];
+    state.selectedId = null;
+    state.nextId = 1;
+    renderAll();
+  }
+});
+
+// --- Prompt output ---
+function updatePrompt() {
+  if (!state.annotations.length) {
+    promptOutput.textContent = 'Add annotations to generate feedback...';
+    return;
+  }
+  let lines = [];
+  lines.push('## Figure Annotations');
+  lines.push(`Image: ${state.imgName || '[no image]'}`);
+  lines.push(`Date: ${new Date().toISOString().slice(0,16).replace('T',' ')}`);
+  lines.push('');
+  state.annotations.forEach((a, i) => {
+    const num = i + 1;
+    if (a.type === 'note') {
+      const p = imgToPercent(a.x, a.y);
+      const txt = a.text || '(no text)';
+      lines.push(`#${num} [NOTE-${a.color}] at (${p.xp}%, ${p.yp}%): "${txt}"`);
+    } else {
+      const p1 = imgToPercent(a.x1, a.y1), p2 = imgToPercent(a.x2, a.y2);
+      const txt = a.text || '(no label)';
+      lines.push(`#${num} [ARROW] from (${p1.xp}%, ${p1.yp}%) to (${p2.xp}%, ${p2.yp}%): "${txt}"`);
+    }
+  });
+  promptOutput.textContent = lines.join('\n');
+}
+
+// --- Copy ---
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const text = promptOutput.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy Feedback'; btn.classList.remove('copied'); }, 1500);
+  });
+});
+
+// --- Keyboard shortcuts ---
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA') {
+    if (e.key === 'Escape') e.target.blur();
+    return;
+  }
+  if (e.key === 'n' || e.key === '1') { state.tool = 'note'; document.querySelectorAll('.tool-btn').forEach(b => b.classList.toggle('active', b.dataset.tool === 'note')); canvasArea.className = 'canvas-area tool-note'; }
+  if (e.key === 'a' || e.key === '2') { state.tool = 'arrow'; document.querySelectorAll('.tool-btn').forEach(b => b.classList.toggle('active', b.dataset.tool === 'arrow')); canvasArea.className = 'canvas-area tool-arrow'; }
+  if (e.key === 's' || e.key === '3') { state.tool = 'select'; document.querySelectorAll('.tool-btn').forEach(b => b.classList.toggle('active', b.dataset.tool === 'select')); canvasArea.className = 'canvas-area tool-select'; }
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (state.selectedId) { state.annotations = state.annotations.filter(a => a.id !== state.selectedId); state.selectedId = null; renderAll(); }
+  }
+  if (e.key === '=' || e.key === '+') { state.zoom = Math.min(state.zoom * 1.25, 5); applyTransform(); renderMarkers(); }
+  if (e.key === '-') { state.zoom = Math.max(state.zoom / 1.25, 0.1); applyTransform(); renderMarkers(); }
+  if (e.key === '0') { fitToView(); renderMarkers(); }
+});
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Init
+renderAll();
+</script>
+</body>
+</html>

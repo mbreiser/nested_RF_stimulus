@@ -1,25 +1,24 @@
-function analyze_single_experiment_mr(exp_folder, opts)
+function cell_info = analyze_single_experiment_mr(exp_folder, opts)
 % ANALYZE_SINGLE_EXPERIMENT_MR  Enhanced bar sweep and bar flash analysis.
 %
 %   ANALYZE_SINGLE_EXPERIMENT_MR(EXP_FOLDER) runs the full analysis pipeline
 %   for a single Protocol 2 experiment, identical to ANALYZE_SINGLE_EXPERIMENT.
 %
-%   ANALYZE_SINGLE_EXPERIMENT_MR(EXP_FOLDER, OPTS) uses the options structure
-%   to override default parameters. In addition to the options accepted by
-%   ANALYZE_SINGLE_EXPERIMENT, this variant supports:
+%   CELL_INFO = ANALYZE_SINGLE_EXPERIMENT_MR(EXP_FOLDER, OPTS) returns a
+%   structure with per-cell metadata and RF centering metrics.
+%
+%   In addition to the options accepted by ANALYZE_SINGLE_EXPERIMENT, this
+%   variant supports:
 %
 %     opts.visualize_everything  (default: false)
-%       When true, adds three diagnostic enhancements:
+%       When true, adds diagnostic enhancements:
 %         1. A voltage histogram figure showing the full-recording and
-%            stimulus-only voltage distributions, so you can see what the
-%            baseline calculations are based on.
-%         2. Vertical lines on all bar flash figures (8x11 heatmap, 1x11
-%            PD-ND, 1x11 orthogonal) marking the flash ON and OFF times.
-%         3. A thicker border and annotation on the PD row of the 8x11
-%            heatmap, visually linking it to the 1x11 PD-ND figure.
-%         4. A red diametric line on the polar plot showing the PD-ND
-%            bar orientation axis.
+%            stimulus-only voltage distributions.
+%         2. Vertical lines on all bar flash figures marking flash ON/OFF.
+%         3. A thicker border and annotation on the PD row of the heatmap.
+%         4. A red diametric line on the polar plot showing PD-ND axis.
 %         5. Relabels PD-ND endpoints to "Leading" / "Trailing".
+%         6. RF centroid marker and degree-labeled axes on PD-ND figure.
 %
 %   INPUTS:
 %     exp_folder - Full path to an experiment directory
@@ -38,17 +37,30 @@ function analyze_single_experiment_mr(exp_folder, opts)
 %                    .visualize_everything  - Boolean, enable all enhancements
 %
 %   OUTPUTS:
-%     Figure 1: Slow bar sweep polar timeseries with vector sum arrow
-%     Figure 2: Full 8x11 bar flash heatmap (all orientations)
-%     Figure 3: 1x11 bar flash subplots along PD-ND axis
-%     Figure 4: 1x11 bar flash subplots along orthogonal axis
-%     Figure 5: (visualize_everything only) Voltage histograms
+%     cell_info - (Optional) Structure with fields:
+%       .exp_folder      - Path to experiment
+%       .date_str        - Experiment date string
+%       .strain          - Fly strain
+%       .frame           - Recording frame
+%       .on_off          - 'ON' or 'OFF' classification
+%       .pd_direction    - Preferred direction in degrees
+%       .pd_orientation  - Bar orientation at PD in degrees
+%       .centroid_idx    - RF centroid as fractional position (1-11)
+%       .centroid_deg    - RF centroid offset from center in degrees
+%       .peak_amplitudes - 1x11 peak amplitude profile
+%
+%     Figures:
+%       Figure 1: Slow bar sweep polar timeseries with vector sum arrow
+%       Figure 2: Full 8x11 bar flash heatmap (all orientations)
+%       Figure 3: 1x11 bar flash subplots along PD-ND axis
+%       Figure 4: 1x11 bar flash subplots along orthogonal axis
+%       Figure 5: (visualize_everything only) Voltage histograms
 %
 %   EXAMPLE:
 %     opts.visualize_everything = true;
 %     opts.save_figs = true;
 %     opts.save_dir  = fullfile(exp_folder, 'analysis_output_mr');
-%     analyze_single_experiment_mr(exp_folder, opts);
+%     cell_info = analyze_single_experiment_mr(exp_folder, opts);
 %
 %   See also ANALYZE_SINGLE_EXPERIMENT, PLOT_VOLTAGE_HISTOGRAMS,
 %            ADD_STIM_TIMING_LINES, LOAD_PROTOCOL2_DATA, PARSE_BAR_DATA,
@@ -113,6 +125,15 @@ function analyze_single_experiment_mr(exp_folder, opts)
     pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
         lut_patterns, lut_functions, opts.plot_order, Tbl, opts.pattern_offset);
 
+    % Compute direction selectivity metrics (DSI, tuning width)
+    lut_dirs_ordered = lut_directions(opts.plot_order);
+    [~, sort_idx] = sort(lut_dirs_ordered);
+    max_v_sorted = max_v(sort_idx);
+    max_v_polar_17 = [max_v_sorted; max_v_sorted(1)];  % 17x1 for circular
+    [d_aligned, ~, ~, ~, dir_fwhm, ~, ~, ~] = ...
+        find_PD_and_order_idx(max_v_polar_17, 0);
+    [~, dsi_vector, dsi_pdnd, ~] = compute_bar_response_metrics(d_aligned);
+
     %% Enhancement D: PD and orthogonal direction lines on polar plot
     if opts.visualize_everything
         add_polar_direction_lines(fig_polar, ...
@@ -160,6 +181,29 @@ function analyze_single_experiment_mr(exp_folder, opts)
         end
     end
 
+    %% Enhancement G: RF centroid and degree-labeled axes
+    %  Compute response-weighted centroid from PD-ND bar flash amplitudes.
+    %  This runs unconditionally (needed for the output struct), but the
+    %  figure annotations are gated by opts.visualize_everything.
+    bl_samples = opts.flash_baseline;
+    [centroid_idx, centroid_deg, rf_metrics] = compute_rf_centroid( ...
+        mean_slow_bf, pd_info, bl_samples);
+
+    fprintf('\n=== RF Centroid (PD-ND axis) ===\n');
+    fprintf('  Amplitudes (mV):      %s\n', ...
+        mat2str(round(rf_metrics.peak_amplitudes, 1)));
+    fprintf('  Peak position:        %d  (%.1f mV)\n', ...
+        rf_metrics.peak_pos, rf_metrics.peak_val);
+    fprintf('  Bump (FWHM):          positions %d-%d  (%d wide)\n', ...
+        rf_metrics.bump_range(1), rf_metrics.bump_range(2), rf_metrics.bump_width);
+    fprintf('  Bump centroid:        %.2f  (of 1-11, center=6)\n', centroid_idx);
+    fprintf('  Centroid offset:      %+.1f°\n', centroid_deg);
+    fprintf('  Centroid-peak delta:  %.2f positions\n', rf_metrics.centroid_peak_delta);
+
+    if opts.visualize_everything
+        annotate_centroid(fig_pd, centroid_idx, centroid_deg, rf_metrics);
+    end
+
     % 1x11 Orthogonal axis
     flash_opts.fig_position = [50 100 1800 300];
     ortho_title = sprintf('Bar Flash Orthogonal — Orient:%.0f° — %s — %s', ...
@@ -169,6 +213,28 @@ function analyze_single_experiment_mr(exp_folder, opts)
         data_slow_bf(:, pd_info.ortho_flash_col, :), ...
         mean_slow_bf(:, pd_info.ortho_flash_col), ...
         pd_info.pos_order, ortho_title, flash_opts);
+
+    % Compute orthogonal RF metrics (bump width)
+    ortho_rf = compute_ortho_rf_metrics(mean_slow_bf, pd_info, opts.flash_baseline);
+    ortho_bump_width = ortho_rf.bump_width;
+    if rf_metrics.bump_width > 0 && ~isnan(ortho_bump_width) && ortho_bump_width > 0
+        aspect_ratio = rf_metrics.bump_width / ortho_bump_width;
+    else
+        aspect_ratio = NaN;
+    end
+
+    fprintf('\n=== Direction & RF Shape Metrics ===\n');
+    fprintf('  DSI (vector sum):    %.3f\n', dsi_vector);
+    fprintf('  DSI (PD-ND):         %.3f\n', dsi_pdnd);
+    fprintf('  Dir tuning FWHM:     %.0f°\n', dir_fwhm);
+    fprintf('  PD bump width:       %d positions\n', rf_metrics.bump_width);
+    fprintf('  Ortho bump width:    %d positions\n', ortho_bump_width);
+    fprintf('  Aspect ratio (PD/O): %.2f\n', aspect_ratio);
+
+    %% Annotate polar plot with DSI, ortho width, aspect ratio
+    if opts.visualize_everything
+        annotate_polar_metrics(fig_polar, dsi_pdnd, ortho_bump_width, aspect_ratio);
+    end
 
     %% Enhancement F: Time scale bars
     %  (Must run BEFORE Enhancement B because querying axes positions in a
@@ -225,6 +291,30 @@ function analyze_single_experiment_mr(exp_folder, opts)
     if opts.save_figs
         save_analysis_figures(opts.save_dir, opts.visualize_everything, ...
             fig_polar, fig_heatmap, fig_pd, fig_ortho, fig_hist);
+    end
+
+    %% Output struct assembly
+    if nargout > 0
+        cell_info.exp_folder      = exp_folder;
+        cell_info.date_str        = date_str;
+        cell_info.strain          = metadata.Strain;
+        cell_info.frame           = metadata.Frame;
+        cell_info.on_off          = params.on_off;
+        cell_info.pd_direction    = pd_info.pd_direction;
+        cell_info.pd_orientation  = pd_info.pd_orientation;
+        cell_info.centroid_idx    = centroid_idx;
+        cell_info.centroid_deg    = centroid_deg;
+        cell_info.peak_amplitudes = rf_metrics.peak_amplitudes;
+        cell_info.peak_pos        = rf_metrics.peak_pos;
+        cell_info.peak_val        = rf_metrics.peak_val;
+        cell_info.bump_range      = rf_metrics.bump_range;
+        cell_info.bump_width      = rf_metrics.bump_width;
+        cell_info.centroid_peak_delta = rf_metrics.centroid_peak_delta;
+        cell_info.dsi_vector      = dsi_vector;
+        cell_info.dsi_pdnd        = dsi_pdnd;
+        cell_info.dir_tuning_fwhm = dir_fwhm;
+        cell_info.ortho_bump_width = ortho_bump_width;
+        cell_info.aspect_ratio    = aspect_ratio;
     end
 
 end
@@ -495,5 +585,285 @@ function add_timebar_to_figure(fig, n_samples, label_str, mode)
 
     % Ensure axes limits are unchanged (don't auto-expand for the bar)
     set(target_ax, 'XLim', xl, 'YLim', yl);
+
+end
+
+
+function [centroid_idx, centroid_deg, rf_metrics] = compute_rf_centroid( ...
+    mean_slow_bf, pd_info, bl_samples)
+% COMPUTE_RF_CENTROID  Bump-based centroid of the PD-ND bar flash profile.
+%
+%   [CENTROID_IDX, CENTROID_DEG, RF_METRICS] = COMPUTE_RF_CENTROID(
+%       MEAN_SLOW_BF, PD_INFO, BL_SAMPLES)
+%   measures the response amplitude at each of the 11 spatial positions
+%   along the PD-ND axis, finds the contiguous depolarising bump (FWHM
+%   region around the peak), and computes the response-weighted centroid
+%   over the bump positions only.
+%
+%   Amplitude is the 99.5th percentile of the baseline-subtracted trace
+%   in the response window (flash onset through offset + 75 ms), following
+%   Gruntman et al. (eLife 2019). Negative amplitudes are thresholded to
+%   zero so that only depolarising responses contribute.
+%
+%   INPUTS:
+%     mean_slow_bf - cell array from parse_bar_flash_data (mean traces)
+%     pd_info      - struct from find_pd_from_lut (needs .bar_flash_col, .pos_order)
+%     bl_samples   - sample indices for baseline (e.g. 1:5000)
+%
+%   OUTPUTS:
+%     centroid_idx - Fractional position (1-11), 6 = geometric center
+%     centroid_deg - Offset from center in degrees (2.5°/position)
+%     rf_metrics   - Structure with fields:
+%       .peak_amplitudes    - 1x11 response amplitudes (mV)
+%       .peak_pos           - Position of maximum amplitude (1-11)
+%       .peak_val           - Maximum amplitude (mV)
+%       .bump_range         - [left, right] FWHM boundary positions
+%       .bump_width         - Number of positions in the bump
+%       .centroid_peak_delta - |centroid_idx - peak_pos|
+%
+%   AMPLITUDE METHOD:
+%     For each position, response amplitude is the 99.5th percentile of
+%     the baseline-subtracted trace during the response window (flash
+%     onset at sample 5001 through flash offset + 75 ms at sample 6551).
+%     This is a robust estimate of the peak depolarisation, less sensitive
+%     to single-sample noise spikes than max().
+%
+%   BUMP FINDING:
+%     The RF bump is defined as the contiguous region around the peak
+%     position where amplitude >= peak/2 (full width at half maximum).
+%     The centroid is computed over bump positions only, excluding
+%     low-amplitude flanking positions that would bias the estimate.
+%     If the bump is genuinely broad (e.g. all 11 positions above
+%     half-max), the centroid uses all positions — bump width itself
+%     is a measured phenotype.
+%
+%   See also FIND_PD_FROM_LUT, ANALYZE_SINGLE_EXPERIMENT_MR
+
+    n_pos = 11;
+    col = pd_info.bar_flash_col;
+    pos_order = pd_info.pos_order;
+    peak_amplitudes = zeros(1, n_pos);
+
+    % Response window: flash onset (5001) through flash offset + 75 ms
+    % Flash offset = 5801 (80.1 ms at 10 kHz), tail = 750 samples (75 ms)
+    resp_start = 5001;
+    resp_end   = 5801 + 750;  % = 6551
+
+    for pos_idx = 1:n_pos
+        flash_pos = pos_order(pos_idx);
+        ts_mean = mean_slow_bf{flash_pos, col};
+        if ~isempty(ts_mean)
+            bl_mean = mean(ts_mean(bl_samples));
+            win_end = min(resp_end, numel(ts_mean));
+            resp_win = resp_start : win_end;
+            peak_amplitudes(pos_idx) = prctile(ts_mean(resp_win) - bl_mean, 99.5);
+        end
+    end
+
+    % Threshold negative amplitudes to zero — only depolarizations count
+    A = max(peak_amplitudes, 0);
+
+    % --- Find the RF bump (contiguous FWHM around peak) ---
+    [peak_val, peak_pos] = max(A);
+
+    if peak_val > 0
+        threshold = peak_val / 2;
+
+        % Grow outward from peak to find contiguous half-max region
+        left = peak_pos;
+        while left > 1 && A(left - 1) >= threshold
+            left = left - 1;
+        end
+        right = peak_pos;
+        while right < n_pos && A(right + 1) >= threshold
+            right = right + 1;
+        end
+        bump_positions = left:right;
+
+        % Response-weighted centroid over bump positions only
+        A_bump = A(bump_positions);
+        centroid_idx = sum(A_bump .* bump_positions) / sum(A_bump);
+    else
+        % Fallback: no depolarising response at any position
+        peak_pos = 6;
+        left = 1;
+        right = n_pos;
+        bump_positions = left:right;
+        centroid_idx = 6;
+    end
+
+    % Convert to degrees: position 6 = 0°, spacing = 2.5°
+    centroid_deg = (centroid_idx - 6) * 2.5;
+
+    % Validation: centroid should be near the peak
+    centroid_peak_delta = abs(centroid_idx - peak_pos);
+    if centroid_peak_delta > 1.0
+        warning('compute_rf_centroid:largeDelta', ...
+            'Centroid (%.2f) is >1 position from peak (%d) — check RF profile.', ...
+            centroid_idx, peak_pos);
+    end
+
+    % Pack metrics
+    rf_metrics.peak_amplitudes     = peak_amplitudes;
+    rf_metrics.peak_pos            = peak_pos;
+    rf_metrics.peak_val            = peak_val;
+    rf_metrics.bump_range          = [left, right];
+    rf_metrics.bump_width          = right - left + 1;
+    rf_metrics.centroid_peak_delta = centroid_peak_delta;
+
+end
+
+
+function annotate_centroid(fig_pd, centroid_idx, centroid_deg, rf_metrics)
+% ANNOTATE_CENTROID  Add centroid marker, bump range and degree labels.
+%
+%   ANNOTATE_CENTROID(FIG_PD, CENTROID_IDX, CENTROID_DEG, RF_METRICS)
+%   1. Replaces tile titles with degree labels (−12.5° to +12.5°)
+%   2. Highlights bump range tiles with a blue border
+%   3. Highlights the tile nearest the centroid with a red border
+%   4. Adds a text annotation showing centroid, peak, and bump width
+%
+%   The figure must be a 1x11 tiled layout from plot_bar_flash_1x11.
+
+    n_pos = 11;
+
+    % Degree labels for positions 1-11 (position 6 = center = 0°)
+    deg_labels = cell(1, n_pos);
+    for p = 1:n_pos
+        deg_val = (p - 6) * 2.5;
+        if p == 1
+            deg_labels{p} = sprintf('%.1f° (Lead)', deg_val);
+        elseif p == 6
+            deg_labels{p} = '0° (Center)';
+        elseif p == 11
+            deg_labels{p} = sprintf('+%.1f° (Trail)', deg_val);
+        elseif deg_val > 0
+            deg_labels{p} = sprintf('+%.1f°', deg_val);
+        else
+            deg_labels{p} = sprintf('%.1f°', deg_val);
+        end
+    end
+
+    % Find all Cartesian axes (sorted left-to-right by position)
+    all_axes = findobj(fig_pd, 'Type', 'axes');
+    % Filter out any polar axes
+    keep = true(size(all_axes));
+    for k = 1:numel(all_axes)
+        if isa(all_axes(k), 'matlab.graphics.axis.PolarAxes')
+            keep(k) = false;
+        end
+    end
+    all_axes = all_axes(keep);
+
+    % Sort by x-position (left to right) to match tile order
+    positions = zeros(numel(all_axes), 4);
+    for k = 1:numel(all_axes)
+        positions(k, :) = all_axes(k).Position;
+    end
+    [~, sort_idx] = sort(positions(:, 1));
+    all_axes = all_axes(sort_idx);
+
+    % Nearest tile to centroid
+    nearest_tile = round(centroid_idx);
+    nearest_tile = max(1, min(n_pos, nearest_tile));
+
+    % Bump range from rf_metrics
+    bump_left  = rf_metrics.bump_range(1);
+    bump_right = rf_metrics.bump_range(2);
+
+    % Update tile titles and highlight centroid + bump tiles
+    for k = 1:min(numel(all_axes), n_pos)
+        ax = all_axes(k);
+        title(ax, deg_labels{k}, 'FontSize', 9);
+
+        if k == nearest_tile
+            % Centroid tile: red border (highest priority)
+            set(ax, 'XColor', [0.8 0 0], 'YColor', [0.8 0 0], 'LineWidth', 2.5);
+        elseif k >= bump_left && k <= bump_right
+            % Bump tiles: blue border
+            set(ax, 'XColor', [0.2 0.4 0.8], 'YColor', [0.2 0.4 0.8], 'LineWidth', 1.5);
+        end
+    end
+
+    % Add centroid + bump info text annotation at top of figure
+    info_str = sprintf('Centroid: %+.1f° (pos %.1f)  |  Peak: pos %d  |  Bump: %d-%d (%d wide)', ...
+        centroid_deg, centroid_idx, rf_metrics.peak_pos, ...
+        bump_left, bump_right, rf_metrics.bump_width);
+    annotation(fig_pd, 'textbox', [0.01 0.92 0.6 0.06], ...
+        'String', info_str, ...
+        'FitBoxToText', 'on', 'FontSize', 10, 'FontWeight', 'bold', ...
+        'Color', [0.8 0 0], 'EdgeColor', 'none', 'BackgroundColor', 'w');
+
+end
+
+
+function ortho_rf = compute_ortho_rf_metrics(mean_slow_bf, pd_info, bl_samples)
+% COMPUTE_ORTHO_RF_METRICS  Peak amplitudes and bump width for orthogonal axis.
+
+    n_pos = 11;
+    col = pd_info.ortho_flash_col;
+    pos_order = pd_info.pos_order;
+    peak_amplitudes = zeros(1, n_pos);
+
+    resp_start = 5001;
+    resp_end   = 5801 + 750;  % = 6551
+
+    for pos_idx = 1:n_pos
+        flash_pos = pos_order(pos_idx);
+        ts_mean = mean_slow_bf{flash_pos, col};
+        if ~isempty(ts_mean)
+            bl_mean = mean(ts_mean(bl_samples(bl_samples <= numel(ts_mean))));
+            win_end = min(resp_end, numel(ts_mean));
+            resp_win = resp_start : win_end;
+            if ~isempty(resp_win)
+                peak_amplitudes(pos_idx) = prctile(ts_mean(resp_win) - bl_mean, 99.5);
+            end
+        end
+    end
+
+    A = max(peak_amplitudes, 0);
+    ortho_rf.peak_amplitudes = peak_amplitudes;
+
+    % FWHM bump width
+    [peak_val, ~] = max(A);
+    if peak_val <= 0
+        ortho_rf.bump_width = NaN;
+        return;
+    end
+    threshold = peak_val / 2;
+    [~, pk] = max(A);
+    left = pk;
+    while left > 1 && A(left - 1) >= threshold
+        left = left - 1;
+    end
+    right = pk;
+    while right < numel(A) && A(right + 1) >= threshold
+        right = right + 1;
+    end
+    ortho_rf.bump_width = right - left + 1;
+
+end
+
+
+function annotate_polar_metrics(fig_polar, dsi_pdnd, ortho_width, aspect_ratio)
+% ANNOTATE_POLAR_METRICS  Add DSI, ortho width, and aspect ratio to polar figure.
+
+    figure(fig_polar);
+
+    % Build annotation string
+    lines = {};
+    lines{end+1} = sprintf('DSI = %.2f', dsi_pdnd);
+    if ~isnan(ortho_width)
+        lines{end+1} = sprintf('Ortho width = %d pos', ortho_width);
+    end
+    if ~isnan(aspect_ratio)
+        lines{end+1} = sprintf('Aspect ratio = %.2f', aspect_ratio);
+    end
+
+    annotation(fig_polar, 'textbox', [0.01 0.01 0.25 0.12], ...
+        'String', strjoin(lines, '\n'), ...
+        'FitBoxToText', 'on', 'FontSize', 9, 'FontWeight', 'bold', ...
+        'Color', [0 0.3 0.7], 'EdgeColor', [0.7 0.7 0.7], ...
+        'BackgroundColor', 'w', 'Interpreter', 'none');
 
 end
