@@ -270,22 +270,24 @@ function r = process_single_cell(exp_folder, Tbl, opts)
     r.pd_direction  = pd_info.pd_direction;
     r.pd_orientation = pd_info.pd_orientation;
 
-    % Parse bar flash data
-    [data_slow_bf, ~, mean_slow_bf, ~] = parse_bar_flash_data(f_data, v_data);
+    % Parse bar flash data (prop_int = 0.5 matches the original protocol-2
+    % gap_between_flashes setting; required since parse_bar_flash_data was
+    % made parameterized).
+    [data_slow_bf, ~, mean_slow_bf, ~] = parse_bar_flash_data(f_data, v_data, 0.5);
 
     % Extract baseline-subtracted mean flash traces (11 x N_timepoints)
     bl_samples = opts.flash_baseline;
 
     [r.pd_flash_bl,    r.pd_flash_baselines]    = extract_flash_traces(mean_slow_bf, ...
-        pd_info.bar_flash_col,   pd_info.pos_order, bl_samples);
+        pd_info.bar_flash_col,   pd_info.pos_order,       bl_samples);
     [r.ortho_flash_bl, r.ortho_flash_baselines] = extract_flash_traces(mean_slow_bf, ...
-        pd_info.ortho_flash_col, pd_info.pos_order, bl_samples);
+        pd_info.ortho_flash_col, pd_info.ortho_pos_order, bl_samples);
 
     % --- M6 alignment for manuscript figures (68%-area centroid -> row 6) ---
     pd_peaks    = compute_pos_peak_amplitudes(mean_slow_bf, ...
-        pd_info.bar_flash_col,   pd_info.pos_order, bl_samples);
+        pd_info.bar_flash_col,   pd_info.pos_order,       bl_samples);
     ortho_peaks = compute_pos_peak_amplitudes(mean_slow_bf, ...
-        pd_info.ortho_flash_col, pd_info.pos_order, bl_samples);
+        pd_info.ortho_flash_col, pd_info.ortho_pos_order, bl_samples);
 
     m6_pd                       = compute_m6_centroid(max(pd_peaks, 0), 0.68);
     r.centroid_m6_rounded       = m6_pd.centroid_int;

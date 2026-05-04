@@ -77,9 +77,24 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
 
     % Orthogonal orientation: 4 columns away (wraps around 8 orientations)
     ortho_flash_col = mod(bar_flash_col - 1 + 4, 8) + 1;
-    ortho_exp_pat = ortho_flash_col + pattern_offset;
-    ortho_mask = Tbl.pattern == ortho_exp_pat & Tbl.function == 3;
-    ortho_orientation = Tbl.orientation(ortho_mask);
+    ortho_exp_pat   = ortho_flash_col + pattern_offset;
+
+    % Locate one orthogonal LUT row (prefer function==3, fall back to any odd function).
+    % We derive both ortho_orientation and ortho_dir_fwd from the SAME row so the two
+    % stay consistent in the rare fallback case.
+    ortho_fwd_mask = Tbl.pattern == ortho_exp_pat & Tbl.function == 3;
+    if any(ortho_fwd_mask)
+        ortho_lut_idx = find(ortho_fwd_mask, 1);
+    else
+        ortho_odd_mask = Tbl.pattern == ortho_exp_pat & mod(Tbl.function, 2) == 1;
+        if ~any(ortho_odd_mask)
+            error('find_pd_from_lut:NoOrthoLutRow', ...
+                'No LUT row found for orthogonal pattern %d (any odd function).', ortho_exp_pat);
+        end
+        ortho_lut_idx = find(ortho_odd_mask, 1);
+    end
+    ortho_orientation = Tbl.orientation(ortho_lut_idx);
+    ortho_dir_fwd     = Tbl.direction(ortho_lut_idx);
 
     % Determine PD spatial ordering (ND to PD, left to right)
     is_forward = mod(pd_function, 2) == 1;
@@ -89,19 +104,8 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
         pos_order = 11:-1:1;
     end
 
-    % Determine ortho spatial ordering via right-hand rule
-    % Right-hand rule: 90 deg clockwise from PD defines the positive ortho direction
-    ortho_fwd_mask = Tbl.pattern == ortho_exp_pat & Tbl.function == 3;
-    if any(ortho_fwd_mask)
-        ortho_dir_fwd = Tbl.direction(find(ortho_fwd_mask, 1));
-    else
-        ortho_odd_mask = Tbl.pattern == ortho_exp_pat & mod(Tbl.function, 2) == 1;
-        if ~any(ortho_odd_mask)
-            error('find_pd_from_lut:NoOrthoLutRow', ...
-                'No LUT row found for orthogonal pattern %d (any odd function).', ortho_exp_pat);
-        end
-        ortho_dir_fwd = Tbl.direction(find(ortho_odd_mask, 1));
-    end
+    % Determine ortho spatial ordering via right-hand rule.
+    % Right-hand rule: 90 deg clockwise from PD defines the positive ortho direction.
     rh_target = mod(pd_direction - 90, 360);
     ang_diff  = abs(ortho_dir_fwd - rh_target);
     ang_diff  = min(ang_diff, 360 - ang_diff);  % handle wraparound

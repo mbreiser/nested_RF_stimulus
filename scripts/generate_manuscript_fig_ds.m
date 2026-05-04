@@ -705,19 +705,25 @@ print_direction_stats_table(on_stats_table);
 fprintf('\n=== Per-direction Wilcoxon rank-sum: T5 (OFF) ctrl vs tutl- ===\n');
 print_direction_stats_table(off_stats_table);
 
-% Save stats table to file
-stats_file = fullfile(out_dir, 'fig_ds_direction_stats.txt');
-fid = fopen(stats_file, 'w');
-fprintf(fid, 'Per-direction Wilcoxon rank-sum tests (ctrl vs tutl-)\n');
-fprintf(fid, 'FDR correction: Benjamini-Hochberg at q=0.05\n\n');
-fprintf(fid, '=== T4 (ON): ctrl (n=%d) vs tutl- (n=%d) ===\n', ...
-    numel(groups_final(1).indices), numel(groups_final(2).indices));
-write_direction_stats_table(fid, on_stats_table);
-fprintf(fid, '\n=== T5 (OFF): ctrl (n=%d) vs tutl- (n=%d) ===\n', ...
-    numel(groups_final(3).indices), numel(groups_final(4).indices));
-write_direction_stats_table(fid, off_stats_table);
-fclose(fid);
-fprintf('Saved: %s\n', stats_file);
+% Save stats table to file (only when actually exporting)
+if ~opts.skip_export
+    stats_file = fullfile(out_dir, sprintf('fig_ds_direction_stats_%ddps.txt', SPEED_DPS));
+    fid = fopen(stats_file, 'w');
+    if fid ~= -1
+        fprintf(fid, 'Per-direction Wilcoxon rank-sum tests (ctrl vs tutl-)\n');
+        fprintf(fid, 'FDR correction: Benjamini-Hochberg at q=0.05\n\n');
+        fprintf(fid, '=== T4 (ON): ctrl (n=%d) vs tutl- (n=%d) ===\n', ...
+            numel(groups_final(1).indices), numel(groups_final(2).indices));
+        write_direction_stats_table(fid, on_stats_table);
+        fprintf(fid, '\n=== T5 (OFF): ctrl (n=%d) vs tutl- (n=%d) ===\n', ...
+            numel(groups_final(3).indices), numel(groups_final(4).indices));
+        write_direction_stats_table(fid, off_stats_table);
+        fclose(fid);
+        fprintf('Saved: %s\n', stats_file);
+    else
+        warning('Could not open %s for writing; skipping stats sidecar.', stats_file);
+    end
+end
 
 %% Export
 ts = datestr(now, 'yyyymmdd_HHMM');
@@ -1257,23 +1263,6 @@ function hLine = draw_polar_patch(axFill, theta, centerVals, bandVals, ...
 end
 
 
-function plot_shaded(ax, x, m, s, color, alpha)
-% PLOT_SHADED  Plot mean line with SEM shading.
-    m = m(:)'; s = s(:)'; x = x(:)';
-    len = min([numel(x), numel(m), numel(s)]);
-    x = x(1:len); m = m(1:len); s = s(1:len);
-
-    valid = ~isnan(m) & ~isnan(s);
-    if sum(valid) < 2, return; end
-
-    xv = x(valid); mv = m(valid); sv = s(valid);
-
-    fill(ax, [xv, fliplr(xv)], [mv+sv, fliplr(mv-sv)], ...
-        color, 'FaceAlpha', alpha, 'EdgeColor', 'none');
-    plot(ax, xv, mv, 'Color', color, 'LineWidth', 0.25);
-end
-
-
 function add_scale_bar_on_axes(ax, t_ms, y_lim, font_size, bar_t)
 % ADD_SCALE_BAR_ON_AXES  Draw time + voltage L-shaped scale bars on left side.
     if isempty(ax) || ~isvalid(ax), return; end
@@ -1412,19 +1401,6 @@ function shift_time = borrow_nearest_shift(time_to_max_row, valid_row, target_di
 end
 
 
-function group = classify_group(is_on, is_ttl)
-    if is_on && ~is_ttl
-        group = 'on_control';
-    elseif is_on && is_ttl
-        group = 'on_ttl';
-    elseif ~is_on && ~is_ttl
-        group = 'off_control';
-    else
-        group = 'off_ttl';
-    end
-end
-
-
 function exp_list = discover_early_experiments(data_root)
 % DISCOVER_EARLY_EXPERIMENTS  Walk {control,ttl}/{ON,OFF}/ tree.
     exp_list = struct('folder', {}, 'date_str', {}, ...
@@ -1473,14 +1449,6 @@ function entry = find_batch_entry(batch_results, folder_name_or_path)
             return;
         end
     end
-end
-
-
-function combined = harmonize_and_merge(early, late)
-% HARMONIZE_AND_MERGE  Merge early and late results into one struct array.
-    early_h = harmonize_results(early, 'early');
-    late_h  = harmonize_results(late, 'late');
-    combined = [early_h, late_h];
 end
 
 
