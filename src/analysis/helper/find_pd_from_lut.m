@@ -34,6 +34,8 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
 %       .ortho_flash_col   - Bar flash column for orthogonal orientation (1-8)
 %       .ortho_orientation - Orthogonal bar orientation in degrees
 %       .pos_order         - 1x11 spatial ordering array (ND side to PD side)
+%       .ortho_pos_order   - 1x11 spatial ordering for orthogonal axis
+%                            (right-hand rule: 90° CW from PD defines +)
 %
 %   VECTOR SUM METHOD:
 %     The preferred direction is computed as the angle of the weighted
@@ -79,12 +81,34 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
     ortho_mask = Tbl.pattern == ortho_exp_pat & Tbl.function == 3;
     ortho_orientation = Tbl.orientation(ortho_mask);
 
-    % Determine spatial ordering (ND to PD, left to right)
+    % Determine PD spatial ordering (ND to PD, left to right)
     is_forward = mod(pd_function, 2) == 1;
     if is_forward
         pos_order = 1:11;
     else
         pos_order = 11:-1:1;
+    end
+
+    % Determine ortho spatial ordering via right-hand rule
+    % Right-hand rule: 90 deg clockwise from PD defines the positive ortho direction
+    ortho_fwd_mask = Tbl.pattern == ortho_exp_pat & Tbl.function == 3;
+    if any(ortho_fwd_mask)
+        ortho_dir_fwd = Tbl.direction(find(ortho_fwd_mask, 1));
+    else
+        ortho_odd_mask = Tbl.pattern == ortho_exp_pat & mod(Tbl.function, 2) == 1;
+        if ~any(ortho_odd_mask)
+            error('find_pd_from_lut:NoOrthoLutRow', ...
+                'No LUT row found for orthogonal pattern %d (any odd function).', ortho_exp_pat);
+        end
+        ortho_dir_fwd = Tbl.direction(find(ortho_odd_mask, 1));
+    end
+    rh_target = mod(pd_direction - 90, 360);
+    ang_diff  = abs(ortho_dir_fwd - rh_target);
+    ang_diff  = min(ang_diff, 360 - ang_diff);  % handle wraparound
+    if ang_diff < 90
+        ortho_pos_order = 1:11;
+    else
+        ortho_pos_order = 11:-1:1;
     end
 
     % Print summary
@@ -106,6 +130,8 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
     end
     fprintf('PD function %d is %s → position order: %s\n', ...
         pd_function, dir_label, mat2str(pos_order));
+    fprintf('Ortho pos_order: %s (right-hand-rule target: %.1f°, ortho fwd: %.1f°)\n', ...
+        mat2str(ortho_pos_order), rh_target, ortho_dir_fwd);
 
     % Pack into output struct
     pd_info.resultant_angle   = resultant_angle;
@@ -118,5 +144,6 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
     pd_info.ortho_flash_col   = ortho_flash_col;
     pd_info.ortho_orientation = ortho_orientation;
     pd_info.pos_order         = pos_order;
+    pd_info.ortho_pos_order   = ortho_pos_order;
 
 end

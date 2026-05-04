@@ -42,6 +42,14 @@ function results = batch_analyze_1DRF(data_root, opts)
 %                            along PD-ND axis
 %       .ortho_flash_bl    - 11xN baseline-subtracted mean flash traces
 %                            along orthogonal axis
+%       .pd_flash_baselines     - 11x1 per-position baseline values (mV)
+%                                 used to recover absolute voltage from .pd_flash_bl
+%       .ortho_flash_baselines  - 11x1 per-position baseline values (mV)
+%       .centroid_m6_rounded        - integer M6 centroid (1..11) on PD axis
+%       .ortho_centroid_m6_rounded  - integer M6 centroid (1..11) on ortho axis
+%       .pd_flash_m6_aligned        - 11xN M6-aligned flash traces, PD axis
+%       .ortho_flash_m6_aligned     - 11xN M6-aligned flash traces, ortho axis
+%       .dsi_vector        - vector-sum direction selectivity index (manuscript)
 %
 %   FIGURES GENERATED:
 %     For each of ON and OFF cells (6 figures total):
@@ -252,6 +260,9 @@ function r = process_single_cell(exp_folder, Tbl, opts)
     [d_aligned, ~, ~, ~, ~, ~, ~, ~] = find_PD_and_order_idx(max_v_polar, 0);
     r.max_v_aligned = d_aligned;
 
+    % Direction-selectivity vector index (used by manuscript figures)
+    [~, r.dsi_vector, ~, ~] = compute_bar_response_metrics(d_aligned);
+
     % Find PD and map to bar flash columns
     pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
         lut_patterns, lut_functions, opts.plot_order, Tbl, opts.pattern_offset);
@@ -265,18 +276,36 @@ function r = process_single_cell(exp_folder, Tbl, opts)
     % Extract baseline-subtracted mean flash traces (11 x N_timepoints)
     bl_samples = opts.flash_baseline;
 
-    r.pd_flash_bl    = extract_flash_traces(mean_slow_bf, ...
-        pd_info.bar_flash_col, pd_info.pos_order, bl_samples);
-    r.ortho_flash_bl = extract_flash_traces(mean_slow_bf, ...
+    [r.pd_flash_bl,    r.pd_flash_baselines]    = extract_flash_traces(mean_slow_bf, ...
+        pd_info.bar_flash_col,   pd_info.pos_order, bl_samples);
+    [r.ortho_flash_bl, r.ortho_flash_baselines] = extract_flash_traces(mean_slow_bf, ...
         pd_info.ortho_flash_col, pd_info.pos_order, bl_samples);
+
+    % --- M6 alignment for manuscript figures (68%-area centroid -> row 6) ---
+    pd_peaks    = compute_pos_peak_amplitudes(mean_slow_bf, ...
+        pd_info.bar_flash_col,   pd_info.pos_order, bl_samples);
+    ortho_peaks = compute_pos_peak_amplitudes(mean_slow_bf, ...
+        pd_info.ortho_flash_col, pd_info.pos_order, bl_samples);
+
+    m6_pd                       = compute_m6_centroid(max(pd_peaks, 0), 0.68);
+    r.centroid_m6_rounded       = m6_pd.centroid_int;
+    r.pd_flash_m6_aligned       = reindex_to_peak(r.pd_flash_bl, r.centroid_m6_rounded);
+
+    m6_ortho                    = compute_m6_centroid(max(ortho_peaks, 0), 0.68);
+    r.ortho_centroid_m6_rounded = m6_ortho.centroid_int;
+    r.ortho_flash_m6_aligned    = reindex_to_peak(r.ortho_flash_bl, r.ortho_centroid_m6_rounded);
 
 end
 
 
-function traces = extract_flash_traces(mean_slow_bf, flash_col, pos_order, bl_samples)
+function [traces, baselines] = extract_flash_traces(mean_slow_bf, flash_col, pos_order, bl_samples)
 % EXTRACT_FLASH_TRACES  Get baseline-subtracted mean traces for one orientation.
 %
+%   [TRACES, BASELINES] = EXTRACT_FLASH_TRACES(...)
 %   Returns an 11 x N matrix (positions x timepoints), ordered ND to PD.
+%   BASELINES is an 11 x 1 vector of per-position baseline values (mV);
+%   absolute voltage can be reconstructed as TRACES + BASELINES (with
+%   broadcast).
 %   All traces are truncated to the minimum length across positions to
 %   handle minor length variations between flash stimuli.
 
@@ -292,11 +321,13 @@ function traces = extract_flash_traces(mean_slow_bf, flash_col, pos_order, bl_sa
     end
 
     if isinf(min_pts)
-        traces = [];
+        traces    = [];
+        baselines = [];
         return;
     end
 
-    traces = NaN(n_pos, min_pts);
+    traces    = NaN(n_pos, min_pts);
+    baselines = NaN(n_pos, 1);
 
     for pos_idx = 1:n_pos
         flash_pos = pos_order(pos_idx);
@@ -304,7 +335,35 @@ function traces = extract_flash_traces(mean_slow_bf, flash_col, pos_order, bl_sa
         if ~isempty(ts)
             ts_trunc = ts(1:min_pts);
             bl = mean(ts_trunc(bl_samples(bl_samples <= min_pts)));
+            baselines(pos_idx) = bl;
             traces(pos_idx, :) = ts_trunc(:)' - bl;
+        end
+    end
+
+end
+
+
+function peak_amplitudes = compute_pos_peak_amplitudes(mean_slow_bf, flash_col, pos_order, bl_samples)
+% COMPUTE_POS_PEAK_AMPLITUDES  Per-position 99.5%ile depolarization (1x11).
+%
+%   Used as the input to COMPUTE_M6_CENTROID for M6-axis alignment.
+%   Each output element is the 99.5th percentile of (response_window
+%   - baseline) at that flash position, over response samples 5001:6551
+%   (200 ms onset window + 75 ms tail).
+
+    n_pos = 11;
+    peak_amplitudes = zeros(1, n_pos);
+    resp_start = 5001;
+    resp_end   = 6551;  % 5801 stim offset + 750 sample tail
+
+    for pos_idx = 1:n_pos
+        flash_pos = pos_order(pos_idx);
+        ts = mean_slow_bf{flash_pos, flash_col};
+        if isempty(ts), continue; end
+        bl  = mean(ts(bl_samples(bl_samples <= numel(ts))));
+        win = resp_start : min(resp_end, numel(ts));
+        if ~isempty(win)
+            peak_amplitudes(pos_idx) = prctile(ts(win) - bl, 99.5);
         end
     end
 
