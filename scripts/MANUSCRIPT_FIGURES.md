@@ -36,23 +36,68 @@ the `opts.data_root` argument of the underlying functions).
 
 ---
 
-## 2. Data sources
+## 2. Data layout (where to point the pipeline)
 
-| Source | Path | Used by |
-|---|---|---|
-| Late-batch flash + bar-sweep results (M6-aligned) | `population_results/batch_results.mat` | All sub-figures |
-| Early-batch pre-bar-flash bar sweeps | `pre-bar-flash/population_results/batch_results_pre_bf.mat` | `_ds` (cache miss only) |
-| Direction LUT | `src/analysis/protocol2/bar_lut.mat` | `_ds` |
-| Ring-of-traces alignment cache | `population_results/ring_of_traces_cache_gauss_999_<speed>dps_abs.mat` | `_ds` (built on first run) |
+The experimental data are kept on **shared lab storage** (the `ttl_1DRF`
+dataset). Each user typically works from a local copy of that tree on their
+own machine. The figure scripts read everything from a single root directory
+that you point at via the `DATA_ROOT` variable in
+`scripts/generate_manuscript_fig_main.m` and `_supp.m`:
 
-The `batch_results.mat` is produced by `src/analysis/protocol2/batch_analyze_1DRF.m`.
-It must contain the M6-aligned fields: `pd_flash_m6_aligned`,
-`ortho_flash_m6_aligned`, `centroid_m6_rounded`,
+```matlab
+DATA_ROOT = '/Users/reiserm/Documents/ttl_1DRF';   % <-- edit for your setup
+```
+
+The pipeline expects the following layout under `DATA_ROOT`:
+
+```
+<DATA_ROOT>/
+├── population_results/
+│   ├── batch_results.mat                              ← required: late-batch results
+│   └── ring_of_traces_cache_gauss_999_<speed>dps_abs.mat
+│                                                     ← auto-generated on first run
+│                                                       (one cache file per speed)
+│
+├── pre-bar-flash/
+│   └── population_results/
+│       └── batch_results_pre_bf.mat                   ← required: early-batch results
+│
+├── pre-bar-flash/{control,ttl}/{ON,OFF}/<exp_folders>/
+│                                                     ← raw early-batch experiments
+│                                                       (only read on cache miss; can be
+│                                                       absent if the cache file is present)
+│
+├── <YYYY_MM_DD_HH_MM>/                                ← raw late-batch experiment folders
+│   └── currentExp.mat                                   (only read by batch_analyze_1DRF.m
+│                                                       when (re)building batch_results.mat;
+│                                                       can be absent for the figure pipeline)
+│
+└── manuscript_figures/                                ← output: PDFs/PNGs land here (auto-created)
+```
+
+The minimum set of files you need on disk to **just regenerate the figures**:
+- `<DATA_ROOT>/population_results/batch_results.mat`
+- `<DATA_ROOT>/pre-bar-flash/population_results/batch_results_pre_bf.mat`
+
+Both are produced by `src/analysis/protocol2/batch_analyze_1DRF.m` and the
+existing pre-bar-flash pipeline.  If you have copies of these two `.mat`
+files, the figures regenerate without needing the raw recordings.
+
+The `batch_results.mat` must contain the M6-aligned fields:
+`pd_flash_m6_aligned`, `ortho_flash_m6_aligned`, `centroid_m6_rounded`,
 `ortho_centroid_m6_rounded`, `pd_flash_baselines`, `ortho_flash_baselines`,
-plus `dsi_vector` and `max_v_aligned`.  Re-run the batch analysis if a
-pre-existing `batch_results.mat` lacks these.
+plus `dsi_vector` and `max_v_aligned`.  Re-run `batch_analyze_1DRF.m` (which
+needs the raw experiment folders) if a pre-existing `batch_results.mat`
+lacks these.
 
-Cell counts (with the local dataset):
+| Source                                | Path under `DATA_ROOT`                                                | Used by                |
+|---|---|---|
+| Late-batch results (M6-aligned)       | `population_results/batch_results.mat`                                | all sub-figures        |
+| Early-batch pre-bar-flash results     | `pre-bar-flash/population_results/batch_results_pre_bf.mat`           | `_ds` (cache miss)     |
+| Direction LUT                         | `src/analysis/protocol2/bar_lut.mat` (in this repo)                   | `_ds`                  |
+| Ring-of-traces alignment cache        | `population_results/ring_of_traces_cache_gauss_999_<speed>dps_abs.mat`| `_ds` (auto-built)     |
+
+Cell counts (with the canonical dataset):
 - **Flash panels (late dataset, 25 cells):** T4 ctrl = 5, T4 *tutl⁻* = 5, T5 ctrl = 7, T5 *tutl⁻* = 8
 - **Bar-sweep panels (combined 48 cells):** 23 early + 25 late
 
@@ -278,6 +323,11 @@ is identical. Compare the data, not the file bytes.
 
 ## 7. Reproducing the figures from scratch
 
+**One-time setup.** Edit `DATA_ROOT` in both
+`scripts/generate_manuscript_fig_main.m` and
+`scripts/generate_manuscript_fig_supp.m` so that it points at your local
+copy of the `ttl_1DRF` dataset (see §2 for the expected layout).
+
 ```matlab
 % In MATLAB, from the repo root:
 addpath(genpath('src'));
@@ -289,13 +339,22 @@ run('scripts/generate_manuscript_fig_main.m')
 run('scripts/generate_manuscript_fig_supp.m')
 ```
 
+If you'd rather not edit the wrappers, you can also call the underlying
+function directly with an explicit data root:
+
+```matlab
+addpath(genpath('src'));
+generate_manuscript_fig('main', struct('data_root', '/path/to/ttl_1DRF'));
+generate_manuscript_fig('supp', struct('data_root', '/path/to/ttl_1DRF'));
+```
+
 The figure pipeline itself does not require any external toolbox.
 CircStat2012a is required only by `batch_analyze_1DRF.m` (when (re)building
 `batch_results.mat` from raw data). If you need to rebuild:
 
 ```matlab
 addpath('<your-CircStat-path>');   % CircStat2012a
-results = batch_analyze_1DRF('<your-data-root>');
+results = batch_analyze_1DRF('/path/to/ttl_1DRF');
 ```
 
 `batch_analyze_1DRF.m` errors out with a clear message if CircStat is not on
