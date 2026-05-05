@@ -136,6 +136,20 @@ In `add_fwhm_bars` (local function):
 2. Find the peak; linearly interpolate the half-max crossings on each side; FWHM = right_x − left_x.
 3. Compute a **per-cell FWHM** the same way for each cell; compare control vs *tutl⁻* with two-sided Wilcoxon rank-sum (`ranksum`); annotate the bracket with `*`/`**`/`***`.
 
+Bracket positions are drawn at the bottom of the amplitude axes (control bracket
+lower, *tutl⁻* bracket above it).
+
+**Computed FWHM values (current figures):**
+
+| | T4 ctrl | T4 *tutl⁻* | T5 ctrl | T5 *tutl⁻* |
+|---|---|---|---|---|
+| **Main (PD axis), group-mean FWHM (positions)** | 5.23 | 6.83 | 5.85 | 6.73 |
+| **Main, per-cell median (n)** | 5.07 (5) | 6.61 (5) | 5.21 (7) | 6.54 (8) |
+| **Main, p (Wilcoxon)** | 0.0952 (n.s.) | | **0.0059 (\*\*)** | |
+| **Supp (ortho), group-mean FWHM** | 8.34 | 9.51 | 6.17 | 7.17 |
+| **Supp, per-cell median (n)** | 6.30 (5) | 8.00 (5) | 5.87 (7) | 6.46 (8) |
+| **Supp, p (Wilcoxon)** | 0.2063 (n.s.) | | 0.0721 (n.s.) | |
+
 ### 4.6 Pooled rank-sum across positions
 `compute_pooled_ranksum` does a sliding pooled comparison over 3-position
 windows, used to compute the p-values overlaid in panel D / B as small
@@ -214,6 +228,17 @@ Per-direction response amplitudes feed:
 - **DSI** = (PD − ND) / (PD + ND), where PD is the cell's preferred direction from the LUT.
 - **Aspect ratio** = (PD + ND) / (OD₁ + OD₂), where ODs are the two directions orthogonal to PD.
 
+**Per-direction Wilcoxon rank-sum** (ctrl vs *tutl⁻*) is also computed at all
+16 PD-aligned directions and printed to the console + saved to
+`<data_root>/manuscript_figures/fig_ds_direction_stats_<speed>dps.txt`.
+P-values are reported both raw and FDR-corrected (Benjamini-Hochberg, q=0.05).
+Counts at q<0.05 in the current figures:
+
+|                | T4 (ON) | T5 (OFF) |
+|---|---|---|
+| **Main, 56 dps** | 7/16 directions | 5/16 directions |
+| **Supp, 28 dps** | 2/16 directions | 4/16 directions |
+
 DSI / AR / Vm box plots use 4 groups (T4 ctrl, T4 *tutl⁻*, T5 ctrl, T5 *tutl⁻*);
 significance brackets are scaled to fit and stacked without overlap. The
 brackets, p-values, and dot positions are computed *inside* the local
@@ -256,7 +281,6 @@ is identical. Compare the data, not the file bytes.
 ```matlab
 % In MATLAB, from the repo root:
 addpath(genpath('src'));
-addpath('<your-CircStat-path>');   % CircStat2012a or equivalent on the path
 
 % Main:
 run('scripts/generate_manuscript_fig_main.m')
@@ -265,7 +289,20 @@ run('scripts/generate_manuscript_fig_main.m')
 run('scripts/generate_manuscript_fig_supp.m')
 ```
 
-First run rebuilds the ring-of-traces caches (slow, several minutes).
+The figure pipeline itself does not require any external toolbox.
+CircStat2012a is required only by `batch_analyze_1DRF.m` (when (re)building
+`batch_results.mat` from raw data). If you need to rebuild:
+
+```matlab
+addpath('<your-CircStat-path>');   % CircStat2012a
+results = batch_analyze_1DRF('<your-data-root>');
+```
+
+`batch_analyze_1DRF.m` errors out with a clear message if CircStat is not on
+the path.
+
+First figure-pipeline run rebuilds the ring-of-traces caches (slow, several
+minutes).
 Subsequent runs are fast.
 
 If `batch_results.mat` is missing the M6 fields, re-run

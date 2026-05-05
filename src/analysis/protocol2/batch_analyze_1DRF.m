@@ -80,6 +80,14 @@ function results = batch_analyze_1DRF(data_root, opts)
     if nargin < 2, opts = struct(); end
     opts = set_batch_defaults(opts, data_root);
 
+    %% Verify CircStat is on the path (used indirectly via find_PD_and_order_idx)
+    if isempty(which('circ_vmpar'))
+        error('batch_analyze_1DRF:CircStatMissing', ...
+            ['CircStat toolbox not on MATLAB path. ' ...
+             'Add CircStat2012a (or equivalent) to the path before calling. ' ...
+             'See https://github.com/circstat/circstat-matlab.']);
+    end
+
     %% Step 1: Load LUT (shared across experiments)
     S_lut = load(opts.lut_path, 'Tbl');
     Tbl = S_lut.Tbl;
