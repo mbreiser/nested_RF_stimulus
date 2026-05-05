@@ -323,23 +323,51 @@ is identical. Compare the data, not the file bytes.
 
 ## 7. Reproducing the figures from scratch
 
-**One-time setup.** Edit `DATA_ROOT` in both
-`scripts/generate_manuscript_fig_main.m` and
-`scripts/generate_manuscript_fig_supp.m` so that it points at your local
-copy of the `ttl_1DRF` dataset (see §2 for the expected layout).
+There are two phases: build the batch `.mat` files (one-time, slow), then
+generate the figures (fast).
+
+### 7.1 First-time setup — build the batch results
+
+Edit the two paths near the top of `scripts/build_batch_results.m` for your
+machine:
 
 ```matlab
-% In MATLAB, from the repo root:
-addpath(genpath('src'));
-
-% Main:
-run('scripts/generate_manuscript_fig_main.m')
-
-% Supplementary:
-run('scripts/generate_manuscript_fig_supp.m')
+DATA_ROOT     = '/path/to/ttl_1DRF';                  % your local copy
+CIRCSTAT_PATH = '/path/to/CircStat2012a';             % CircStat toolbox
 ```
 
-If you'd rather not edit the wrappers, you can also call the underlying
+Then in MATLAB, from the repo root:
+
+```matlab
+run('scripts/build_batch_results.m')
+```
+
+This runs the two batch pipelines in sequence and produces:
+- `<DATA_ROOT>/population_results/batch_results.mat` (late dataset, 25 cells)
+- `<DATA_ROOT>/pre-bar-flash/population_results/batch_results_pre_bf.mat` (early dataset, 23 cells)
+
+The two pipelines together take a few minutes. CircStat is needed only at
+this stage; both batch functions error out with a clear message if the
+toolbox is not on the path.
+
+If a colleague has already produced these two `.mat` files (e.g. via
+shared lab storage), you can skip 7.1 — just drop the files into the paths
+above and proceed to 7.2.
+
+### 7.2 Generate the figures
+
+Edit `DATA_ROOT` near the top of
+`scripts/generate_manuscript_fig_main.m` and
+`scripts/generate_manuscript_fig_supp.m` so that it points at the same
+local copy as in 7.1 (see §2 for the expected layout). Then:
+
+```matlab
+addpath(genpath('src'));
+run('scripts/generate_manuscript_fig_main.m')   % main figure
+run('scripts/generate_manuscript_fig_supp.m')   % supplementary
+```
+
+If you'd rather not edit the wrappers, you can call the underlying
 function directly with an explicit data root:
 
 ```matlab
@@ -348,17 +376,8 @@ generate_manuscript_fig('main', struct('data_root', '/path/to/ttl_1DRF'));
 generate_manuscript_fig('supp', struct('data_root', '/path/to/ttl_1DRF'));
 ```
 
-The figure pipeline itself does not require any external toolbox.
-CircStat2012a is required only by `batch_analyze_1DRF.m` (when (re)building
-`batch_results.mat` from raw data). If you need to rebuild:
-
-```matlab
-addpath('<your-CircStat-path>');   % CircStat2012a
-results = batch_analyze_1DRF('/path/to/ttl_1DRF');
-```
-
-`batch_analyze_1DRF.m` errors out with a clear message if CircStat is not on
-the path.
+The figure pipeline itself does not require CircStat — only the build step
+in 7.1 does.
 
 First figure-pipeline run rebuilds the ring-of-traces caches (slow, several
 minutes).
@@ -398,8 +417,9 @@ the schematic + cosmetic adjustments — do not re-edit numerics.
 
 ```
 scripts/
-  generate_manuscript_fig_main.m              ← user-facing wrapper (5 lines)
-  generate_manuscript_fig_supp.m              ← user-facing wrapper (5 lines)
+  build_batch_results.m                       ← one-time setup: runs both batches
+  generate_manuscript_fig_main.m              ← user-facing wrapper
+  generate_manuscript_fig_supp.m              ← user-facing wrapper
   generate_manuscript_fig.m                   ← combiner function
   generate_manuscript_fig_ef.m                ← flash sub-figure function
   generate_manuscript_fig_ds.m                ← bar-sweep sub-figure function
@@ -407,6 +427,7 @@ scripts/
 
 src/analysis/protocol2/
   batch_analyze_1DRF.m                        ← extended with M6 + dsi_vector
+  batch_analyze_pre_bar_flash.m               ← new: early-batch (summer 2025) processor
   compute_m6_centroid.m                       ← new: 68%-area centroid helper
   reindex_to_peak.m                           ← new: row-shift helper
   pipeline/parse_bar_data_pre_bf.m            ← new: early-batch parser
