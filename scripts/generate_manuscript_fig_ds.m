@@ -1045,8 +1045,8 @@ function draw_ar_panel(ax, results)
 
     if isempty(all_vals), return; end
 
-    y_limits = [0 5.5];
-    y_ticks = 0:1:5;
+    y_limits = [0 4.4];
+    y_ticks = 0:1:4;
 
     hold(ax, 'on');
 
