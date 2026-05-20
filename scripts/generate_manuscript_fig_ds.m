@@ -1257,12 +1257,12 @@ function [axPolar, axFill] = plot_polar_with_patch(ax_position, ...
 
     % --- Outward direction arrows on the polar plot (16 spokes, always on) ---
     % Drawn in axFill data coords so they sit exactly on the polar grid spokes.
-    % Thin shaft + filled triangular arrowhead, with a small whitespace gap
-    % between the 30 mV ring and the arrow shaft.
-    rL = rlim(axPolar);
-    r_tail = rL(2) * 1.12;   % small whitespace gap outside the 30 mV ring
-    r_head = rL(2) * 1.26;   % outward tip (unchanged)
-    head_len   = (r_head - r_tail) * 0.50;   % triangular head (~10% smaller than before)
+    % Thin shaft + filled triangular arrowhead, sitting just outside the polar
+    % box edge (rpad). Anchoring to rpad — not rL(2) — keeps the arrows visibly
+    % outside the polar across different rpad_factor values (main vs supp).
+    r_tail = rpad * 1.02;    % small whitespace gap just outside the polar box
+    r_head = rpad * 1.15;    % outward tip
+    head_len   = (r_head - r_tail) * 0.50;   % triangular head
     barb_angle = deg2rad(155);                % obtuse angle = swept-back triangle
     theta_spokes = (0:22.5:337.5) * pi / 180;
     for di = 1:numel(theta_spokes)
