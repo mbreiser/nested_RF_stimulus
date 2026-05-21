@@ -25,6 +25,10 @@ function fig = generate_manuscript_fig_ds(speed_dps, opts)
 %       .preview_ring_only - true to render only Panels A & B (ring+polar)
 %                            and save with a _preview_ring suffix. Used as
 %                            a fast iteration loop for the polar+ring panel.
+%       .rotate_pd_left    - true to rotate the polar+ring CCW by 90° so
+%                            PD points LEFT (matches the EF flash figure's
+%                            PD-on-left orientation). Output filename gets
+%                            a _rot90 suffix.
 %
 %   See also GENERATE_MANUSCRIPT_FIG_EF, GENERATE_MANUSCRIPT_FIG.
 
@@ -33,6 +37,7 @@ if ~isfield(opts, 'data_root'),         opts.data_root         = '/Users/reiserm
 if ~isfield(opts, 'skip_export'),       opts.skip_export       = false; end
 if ~isfield(opts, 'stamp_path'),        opts.stamp_path        = ''; end
 if ~isfield(opts, 'preview_ring_only'), opts.preview_ring_only = false; end
+if ~isfield(opts, 'rotate_pd_left'),    opts.rotate_pd_left    = false; end
 
 % --- Ensure repo src/ is on the MATLAB path -------------------------------
 % load_protocol2_data, parse_bar_data, etc. live in src/analysis/... If a
@@ -629,13 +634,18 @@ if SHOW_POLAR_DIAG
     fprintf('T5 tutl  polar_mean max: %.1f mV\n', max(groups_final(4).polar_mean));
 end
 
+% Rotation offset for the polar+ring layout (0 = PD up; pi/2 = PD left)
+ROT_OFFSET = 0;
+if opts.rotate_pd_left, ROT_OFFSET = pi/2; end
+
 % --- Panel A: T4 (ON) ring-of-traces ---
 panelA_center = [0.17, 0.47];
 draw_ring_panel(fig, panelA_center, RING, ...
     groups_final(1), groups_final(2), ...   % ON ctrl, ON tutl-
     pd_aligned_angles, all_cells, ...
     t_ms, display_len_ds, shared_ylim, DS_FACTOR, on_stats, ...
-    [0 0 0], [1 0 0], RING_XLIM, RING_TRACE_LW, RING_SCALEBAR_T, true, POLAR_RPAD_FACTOR);
+    [0 0 0], [1 0 0], RING_XLIM, RING_TRACE_LW, RING_SCALEBAR_T, true, POLAR_RPAD_FACTOR, ...
+    ROT_OFFSET);
 
 % --- Panel B: T5 (OFF) ring-of-traces ---
 panelB_center = [0.48, 0.47];
@@ -643,7 +653,8 @@ draw_ring_panel(fig, panelB_center, RING, ...
     groups_final(3), groups_final(4), ...   % OFF ctrl, OFF tutl-
     pd_aligned_angles, all_cells, ...
     t_ms, display_len_ds, shared_ylim, DS_FACTOR, off_stats, ...
-    [0.4 0.4 0.4], [0.8 0.2 0.2], RING_XLIM, RING_TRACE_LW, [], false, POLAR_RPAD_FACTOR);
+    [0.4 0.4 0.4], [0.8 0.2 0.2], RING_XLIM, RING_TRACE_LW, [], false, POLAR_RPAD_FACTOR, ...
+    ROT_OFFSET);
 
 if ~opts.preview_ring_only
     % --- Right-side panels: C (top row) and D (bottom row) ---
@@ -748,10 +759,12 @@ if ~SUBTRACT_BASELINE
 else
     abs_tag = '';
 end
+rot_tag = '';
+if opts.rotate_pd_left, rot_tag = '_rot90'; end
 if opts.preview_ring_only
-    file_stem = sprintf('fig_ds_preview_ring_%s%s_v3_%s', cache_tag, abs_tag, ts);
+    file_stem = sprintf('fig_ds_preview_ring_%s%s_v3%s_%s', cache_tag, abs_tag, rot_tag, ts);
 else
-    file_stem = sprintf('fig_ds_panels_ABCD_%s%s_v3_%s', cache_tag, abs_tag, ts);
+    file_stem = sprintf('fig_ds_panels_ABCD_%s%s_v3%s_%s', cache_tag, abs_tag, rot_tag, ts);
 end
 pdf_file = fullfile(out_dir, [file_stem '.pdf']);
 png_file = fullfile(out_dir, [file_stem '.png']);
@@ -770,10 +783,14 @@ end  % main function
 
 function draw_ring_panel(fig, center, ring, g_ctrl, g_ttl, ...
     pd_aligned_angles, all_cells, t_ms, display_len_ds, y_lim, DS_FACTOR, dir_stats, ...
-    ctrl_color, ttl_color, x_range, trace_lw, scalebar_t, show_pd_lines, rpad_factor)
+    ctrl_color, ttl_color, x_range, trace_lw, scalebar_t, show_pd_lines, rpad_factor, ...
+    rot_offset)
 % DRAW_RING_PANEL  Draw a ring-of-traces panel at the specified figure position.
 %   show_pd_lines (optional): if true, draw PD/OD/ND reference lines to ctrl data values.
 %   rpad_factor   (optional): polar overlay padding factor (1.10 main / 1.15 supp).
+%   rot_offset    (optional): radian rotation applied to ring positions and
+%                             to all axFill data overlays. Default 0 (PD up).
+%                             Use pi/2 for PD-left orientation.
 
     if nargin < 12, dir_stats = []; end
     if nargin < 13 || isempty(ctrl_color), ctrl_color = [0 0 0]; end
@@ -783,13 +800,15 @@ function draw_ring_panel(fig, center, ring, g_ctrl, g_ttl, ...
     if nargin < 17 || isempty(scalebar_t), scalebar_t = 1000; end
     if nargin < 18 || isempty(show_pd_lines), show_pd_lines = false; end
     if nargin < 19 || isempty(rpad_factor), rpad_factor = 1.10; end
+    if nargin < 20 || isempty(rot_offset), rot_offset = 0; end
 
     % --- 16 radial timeseries subplots ---
     ax_scalebar = [];  % for scale bar (8 o'clock position = di 15)
     ax_ring = gobjects(1, 16);  % store handles so we can place asterisks later
     for di = 1:16
         angle_deg = pd_aligned_angles(di);
-        angle_rad = deg2rad(angle_deg);   % un-mirrored: ring screen angle = polar angle
+        % Ring screen angle = polar angle + rot_offset (rot=0: PD up; rot=pi/2: PD left)
+        angle_rad = deg2rad(angle_deg) + rot_offset;
 
         x_pos = center(1) + ring.radius_x * cos(angle_rad);
         y_pos = center(2) + ring.radius_y * sin(angle_rad);
@@ -835,7 +854,8 @@ function draw_ring_panel(fig, center, ring, g_ctrl, g_ttl, ...
         'ctrl_line_color', ctrl_color, 'ctrl_fill_color', ctrl_fill, ...
         'ttl_line_color', ttl_color, 'ttl_fill_color', ttl_fill, ...
         'dir_stats', dir_stats, ...
-        'rpad_factor', rpad_factor);
+        'rpad_factor', rpad_factor, ...
+        'rot_offset', rot_offset);
     [axPolar, axFill] = plot_polar_with_patch(polar_pos, theta, ...
         g_ctrl.polar_mean, g_ctrl.polar_sem, ...
         g_ttl.polar_mean, g_ttl.polar_sem, polar_opts);
@@ -875,17 +895,39 @@ function draw_ring_panel(fig, center, ring, g_ctrl, g_ttl, ...
         r_nd = ctrl_mean(nd_idx);
         ref_lw = axPolar.LineWidth * 2;  % thicker than axis lines
         hold(axFill, 'on');
-        % PD: up (y = +r), OD: right (x = +r), ND: down (y = -r)
-        plot(axFill, [0 0],     [0 r_pd], 'k-', 'LineWidth', ref_lw);
-        plot(axFill, [0 r_od],  [0 0],    'k-', 'LineWidth', ref_lw);
-        plot(axFill, [0 0],     [0 -r_nd],'k-', 'LineWidth', ref_lw);
-        % Labels near tips
-        text(axFill, 0,          r_pd*1.1,  'PD', 'FontSize', 5, 'FontWeight', 'bold', ...
-            'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom');
-        text(axFill, r_od*1.1,   0,         'OD', 'FontSize', 5, 'FontWeight', 'bold', ...
-            'HorizontalAlignment', 'left',   'VerticalAlignment', 'middle');
-        text(axFill, 0,          -r_nd*1.1, 'ND', 'FontSize', 5, 'FontWeight', 'bold', ...
-            'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
+        % Rotation helper (CCW by rot_offset) applied so PD/OD/ND lines
+        % follow the rotated coordinate system.
+        ca = cos(rot_offset); sa = sin(rot_offset);
+        rot2d = @(x, y) deal(x*ca - y*sa, x*sa + y*ca);
+        % PD: up at rot=0 (y = +r); OD: right; ND: down
+        [px1, py1] = rot2d(0, r_pd);
+        [ox1, oy1] = rot2d(r_od, 0);
+        [nx1, ny1] = rot2d(0, -r_nd);
+        plot(axFill, [0 px1], [0 py1], 'k-', 'LineWidth', ref_lw);
+        plot(axFill, [0 ox1], [0 oy1], 'k-', 'LineWidth', ref_lw);
+        plot(axFill, [0 nx1], [0 ny1], 'k-', 'LineWidth', ref_lw);
+        % Labels near tips — choose Horizontal/VerticalAlignment to match the
+        % rotated direction (so text sits outside the tip).
+        [pdt_x, pdt_y] = rot2d(0,        r_pd*1.1);
+        [odt_x, odt_y] = rot2d(r_od*1.1, 0);
+        [ndt_x, ndt_y] = rot2d(0,       -r_nd*1.1);
+        if rot_offset == 0
+            % PD up, OD right, ND down (original)
+            text(axFill, pdt_x, pdt_y, 'PD', 'FontSize', 5, 'FontWeight', 'bold', ...
+                'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom');
+            text(axFill, odt_x, odt_y, 'OD', 'FontSize', 5, 'FontWeight', 'bold', ...
+                'HorizontalAlignment', 'left',   'VerticalAlignment', 'middle');
+            text(axFill, ndt_x, ndt_y, 'ND', 'FontSize', 5, 'FontWeight', 'bold', ...
+                'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
+        else
+            % rot=pi/2: PD left (text to the LEFT of tip), OD up (above tip), ND right
+            text(axFill, pdt_x, pdt_y, 'PD', 'FontSize', 5, 'FontWeight', 'bold', ...
+                'HorizontalAlignment', 'right',  'VerticalAlignment', 'middle');
+            text(axFill, odt_x, odt_y, 'OD', 'FontSize', 5, 'FontWeight', 'bold', ...
+                'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom');
+            text(axFill, ndt_x, ndt_y, 'ND', 'FontSize', 5, 'FontWeight', 'bold', ...
+                'HorizontalAlignment', 'left',   'VerticalAlignment', 'middle');
+        end
     end
 
     % --- Legend: upper-left of ring area ---
@@ -1192,6 +1234,8 @@ function [axPolar, axFill] = plot_polar_with_patch(ax_position, ...
     if ~isfield(opts, 'ttl_label'),       opts.ttl_label       = '{\ittutl-}'; end
     if ~isfield(opts, 'dir_stats'),      opts.dir_stats       = []; end
     if ~isfield(opts, 'rpad_factor'),    opts.rpad_factor     = 1.10; end
+    if ~isfield(opts, 'rot_offset'),     opts.rot_offset      = 0; end
+    rot = opts.rot_offset;
 
     axPolar = polaraxes('Position', ax_position);
     hold(axPolar, 'on');
@@ -1222,15 +1266,17 @@ function [axPolar, axFill] = plot_polar_with_patch(ax_position, ...
     plot(axFill, 30*cos(th_circ), 30*sin(th_circ), 'k-', 'LineWidth', 0.4);
 
 
+    % Apply rotation by passing theta+rot to draw_polar_patch (pol2cart inside)
+    theta_rot = theta + rot;
     hCtrl = gobjects(1, 1);
     if ~isempty(center_ctrl) && any(~isnan(center_ctrl))
-        hCtrl = draw_polar_patch(axFill, theta, center_ctrl, spread_ctrl, ...
+        hCtrl = draw_polar_patch(axFill, theta_rot, center_ctrl, spread_ctrl, ...
             opts.ctrl_line_color, opts.ctrl_fill_color, opts.alpha, 0.75);
     end
 
     hTtl = gobjects(1, 1);
     if ~isempty(center_ttl) && any(~isnan(center_ttl))
-        hTtl = draw_polar_patch(axFill, theta, center_ttl, spread_ttl, ...
+        hTtl = draw_polar_patch(axFill, theta_rot, center_ttl, spread_ttl, ...
             opts.ttl_line_color, opts.ttl_fill_color, opts.alpha, 0.75);
     end
 
@@ -1250,10 +1296,16 @@ function [axPolar, axFill] = plot_polar_with_patch(ax_position, ...
     axPolar.FontSize = 5;
     axPolar.LineWidth = 0.5;
 
-    % "30 mV" label at 3 o'clock (0 deg = right side)
+    % "30 mV" label — sits at theta=0 spoke (3 o'clock when rot=0; 12 o'clock when rot=pi/2)
     rL = rlim(axPolar);
-    text(axFill, rL(2)*1.05, 0, '30 mV', 'FontSize', 5, ...
-        'HorizontalAlignment', 'left', 'VerticalAlignment', 'middle');
+    [lab_x, lab_y] = pol2cart(rot, rL(2)*1.05);
+    if rot == 0
+        ha = 'left'; va = 'middle';
+    else
+        ha = 'center'; va = 'bottom';   % rot=pi/2: text sits above the tip
+    end
+    text(axFill, lab_x, lab_y, '30 mV', 'FontSize', 5, ...
+        'HorizontalAlignment', ha, 'VerticalAlignment', va);
 
     % --- Outward direction arrows on the polar plot (16 spokes, always on) ---
     % Drawn in axFill data coords so they sit exactly on the polar grid spokes.
@@ -1266,7 +1318,7 @@ function [axPolar, axFill] = plot_polar_with_patch(ax_position, ...
     barb_angle = deg2rad(155);                % obtuse angle = swept-back triangle
     theta_spokes = (0:22.5:337.5) * pi / 180;
     for di = 1:numel(theta_spokes)
-        th = theta_spokes(di);
+        th = theta_spokes(di) + rot;  % rotated spoke direction
         ux = cos(th); uy = sin(th);  % outward unit direction
         [xt, yt] = pol2cart(th, r_tail);
         [xh, yh] = pol2cart(th, r_head);
