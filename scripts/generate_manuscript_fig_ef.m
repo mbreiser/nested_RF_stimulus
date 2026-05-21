@@ -733,15 +733,27 @@ function add_fwhm_bars(ax, positions, stats, col_c, col_t, y_lim, font_stat, ~, 
     [fw_c, lx_c, rx_c] = compute_fwhm_positions(positions, ctrl_mn);
     [fw_t, lx_t, rx_t] = compute_fwhm_positions(positions, ttl_mn);
     fwhm_y_base = y_lim(1) + 0.5; fwhm_y_gap = 1.0;
+    % Horizontal bars: drawn as patch() rectangles so endpoints are exact and
+    % no PDF stroke-cap projection extends past the FWHM range. Vertical bar
+    % thickness is computed so the bar visually matches the prior LineWidth=2.5.
+    old_units = get(ax, 'Units');
+    set(ax, 'Units', 'points');
+    ax_pos_pt = get(ax, 'Position');
+    set(ax, 'Units', old_units);
+    bar_h_data = 2.5 * diff(y_lim) / ax_pos_pt(4);  % 2.5 pt expressed in data (mV)
     if ~isnan(fw_c)
         y_c = fwhm_y_base;
-        plot(ax, [lx_c rx_c], [y_c y_c], '-', 'Color', col_c, 'LineWidth', 2.5);
+        patch(ax, [lx_c rx_c rx_c lx_c], ...
+              [y_c-bar_h_data/2, y_c-bar_h_data/2, y_c+bar_h_data/2, y_c+bar_h_data/2], ...
+              col_c, 'EdgeColor', 'none', 'Clipping', 'off');
         plot(ax, [lx_c lx_c], y_c+[-0.3 0.3], '-', 'Color', col_c, 'LineWidth', 1.0);
         plot(ax, [rx_c rx_c], y_c+[-0.3 0.3], '-', 'Color', col_c, 'LineWidth', 1.0);
     end
     if ~isnan(fw_t)
         y_t = fwhm_y_base + fwhm_y_gap;
-        plot(ax, [lx_t rx_t], [y_t y_t], '-', 'Color', col_t, 'LineWidth', 2.5);
+        patch(ax, [lx_t rx_t rx_t lx_t], ...
+              [y_t-bar_h_data/2, y_t-bar_h_data/2, y_t+bar_h_data/2, y_t+bar_h_data/2], ...
+              col_t, 'EdgeColor', 'none', 'Clipping', 'off');
         plot(ax, [lx_t lx_t], y_t+[-0.3 0.3], '-', 'Color', col_t, 'LineWidth', 1.0);
         plot(ax, [rx_t rx_t], y_t+[-0.3 0.3], '-', 'Color', col_t, 'LineWidth', 1.0);
     end
