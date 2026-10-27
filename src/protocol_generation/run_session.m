@@ -65,7 +65,7 @@ function S = run_session(exp_folder, varargin)
 %     n_reps_stage2  3;  p2_bar_flash_pattern_id  [] = max(pattern_order)-1 (run_protocol2's slow bar-flash pattern)
 %     thresholds: p1_peak_floor_mV 2, pd_vector_length_floor 0.1, center_max_dist_px 6, center_max_offset_px 4,
 %                 peak_floor_mV 3
-%     ao_channel 2, ai_channels [1 2], adc_rates_hz [0 10000 10000 0], host_config_file, pretrial_s 2,
+%     ao_channel 2, ai_channels [] (the Host's AI TCP stream; [] = off, nothing reads it), adc_rates_hz [0 10000 10000 0], host_config_file, pretrial_s 2,
 %     ao_zero_tail_s 0.1, dark_s 30, controller_factory, sim_speed 0, show_figures (= ~dry_run), auto_accept (= dry_run)
 %     show_status    (= show_figures)  the status window (SessionProgress): steps, estimates, clock times, the
 %                    current row and time left, the last FLAG; the time estimates are printed either way
@@ -207,7 +207,7 @@ d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', ''
     'p1_readout_fn', [], 'peak_frame', [], 'p2_folder', '', 'p2b_folder', '', 'readout_fn', [], 'readout_dir', '', ...
     'analysis_repo', '', 'center', [], 'n_reps_stage2', 3, 'n_reps_p2', 3, 'p2_bar_flash_pattern_id', [], ...
     'p1_peak_floor_mV', 2, 'pd_vector_length_floor', 0.1, 'center_max_dist_px', 6, 'center_max_offset_px', 4, ...
-    'peak_floor_mV', 3, 'auto_accept', [], 'show_figures', [], 'ao_channel', 2, 'ai_channels', [1 2], ...
+    'peak_floor_mV', 3, 'auto_accept', [], 'show_figures', [], 'ao_channel', 2, 'ai_channels', [], ...
     'adc_rates_hz', [0 10000 10000 0], 'host_config_file', '', 'pretrial_s', 2, 'ao_zero_tail_s', 0.1, 'dark_s', 30, ...
     'controller_factory', [], 'sim_speed', 0, 'verbose_mock', false, 'show_status', [], 'overview_plots', true);
 if numel(varargin) == 1 && isstruct(varargin{1})
@@ -824,7 +824,10 @@ try
     ctlr.open(true); ctx('opened') = true;
     checked('setRootDirectory', ctlr.setRootDirectory(pkg));
     if ~isempty(ao_channel), checked('setActiveAOChannels', ctlr.setActiveAOChannels(ao_channel)); end
-    checked('setActiveAIChannels', ctlr.setActiveAIChannels(opts.ai_channels));
+    % The AI TCP stream (5-byte 0x14 messages, ~90 per s) is never read: it fills PanelsController's reply
+    % buffer, whose byte-pair search then takes stream bytes for replies ('Index exceeds ... 1' at resp(2)).
+    % Disk logging does not need it (ADC rates come from the Host configuration).
+    if ~isempty(opts.ai_channels), checked('setActiveAIChannels', ctlr.setActiveAIChannels(opts.ai_channels)); end
     ctx('log') = true;
     checked('startLog', ctlr.startLog());
     status.state = 'running'; write_json(status_file, status);
