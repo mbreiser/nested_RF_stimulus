@@ -838,7 +838,8 @@ try
         status.rows(k).started = iso_now(); t_row = tic;
         % what the arena is playing now, for a display viewer (one small file, rewritten per row)
         write_json(fullfile(S.exp_folder, 'now_playing.json'), struct('package', pkg, 'row', k, 'n_rows', numel(rows), ...
-            'label', r.label, 'pattern_id', r.pattern_id, 'pfn_id', r.pfn_id, 'afn_id', r.afn_id, 'duration_s', r.duration_s, 'started', status.rows(k).started));
+            'label', r.label, 'pattern_id', r.pattern_id, 'pfn_id', r.pfn_id, 'afn_id', r.afn_id, 'duration_s', r.duration_s, 'started', status.rows(k).started, ...
+            'started_posix_ms', int64(posixtime(datetime('now', 'TimeZone', 'UTC')) * 1000)));
         checked('setControlMode', ctlr.setControlMode(1));
         checked('setPatternID', ctlr.setPatternID(r.pattern_id));
         checked('setPatternFunctionID', ctlr.setPatternFunctionID(r.pfn_id));
