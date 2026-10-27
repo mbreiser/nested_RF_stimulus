@@ -113,7 +113,7 @@ check(sb.rows_total == 12 && S2.out.p2b.n_bars == 22 && S2.out.p2b.n_flashes == 
 fn2 = dir(fullfile(exp2, 'p2b', 'Functions', '*.mat'));
 check(numel(fn2) == 11 && sum(contains({fn2.name}, 'flashes_80ms')) == 5 && sum(contains({fn2.name}, 'flashes_14ms')) == 5, 'stage 2 function names carry flashes_80ms / flashes_14ms for the read-out''s trial classifier');
 dp = dir(fullfile(exp2, 'p2b', 'Patterns', '0001_*.mat'));
-check(isscalar(dp) && contains(dp.name, 'bar_flashes_slow') && contains(dp.name, 'FLASHES'), 'stage 2 uses the stage-1 slow bar-flash pattern (max-1) as pattern 1, name keeps FLASHES');
+check(isscalar(dp) && contains(dp.name, 'bar_flashes_slow') && contains(dp.name, 'FLASHES'), 'stage 2 uses the stage-1 package''s first FLASHES pattern as pattern 1, name keeps FLASHES');
 m = load(fullfile(exp2, 'p2b', 'Functions', dir(fullfile(exp2, 'p2b', 'Functions', '0002_*')).name)); f = m.pfnparam.func;
 Sq = readtable(fullfile(readout_dir, 'JY1008_stage2_sequence.csv'), 'TextType', 'string', 'Delimiter', ',');
 first = Sq(Sq.repeat == 1 & Sq.cls == "flash80" & Sq.order == 1, :);
@@ -135,8 +135,8 @@ S3 = run_session(exp3, 'dry_run', true, 'cell', 'JY1008', 'side', 'L', 'p1_packa
     'p2_folder', p2pkg_C, 'readout_dir', rd3, 'steps', {'p1', 'p1_peak', 'p2a', 'readout1', 'p2b', 'readout', 'build'}, 'analysis_repo', analysis_repo);
 check(strcmp(S3.out.readout1.stage2_mode, 'all88') && S3.decisions(strcmp({S3.decisions.decision}, 'usable_pd')).fallback, 'no usable PD (L28 0.02): flagged, stage 2 = all 88 bars');
 sb3 = jsondecode(fileread(fullfile(exp3, 'p2b', 'Reports', 'run_status.json')));
-check(sb3.rows_total == 6 && isequal([sb3.rows.pattern_id], [4 5 5 6 6 7]) && abs(sum([sb3.rows.duration_s]) - 3*(22 + 11)) < 1e-6, ...
-    'all-88 fallback: the package''s two bar-flash rows x 3 reps with run_protocol2''s pattern substitution (4 5 | 5 6 | 6 7)');
+check(sb3.rows_total == 6 && isequal([sb3.rows.pattern_id], [4 5 4 5 4 5]) && isequal([sb3.rows.pfn_id], [3 4 3 4 3 4]) && abs(sum([sb3.rows.duration_s]) - 3*(22 + 11)) < 1e-6, ...
+    'all-88 fallback: the package''s two FLASHES rows x 3 reps, the same patterns every rep as run_protocol2 (no Rep1/2/3 functions in this package)');
 dc3 = S3.decisions(strcmp({S3.decisions.decision}, 'center'));
 check(dc3.fallback && strcmp(dc3.flags, 'no_pd_fallback') && isequal(S3.center_shift_px, round(p1xy - center)), sprintf('center falls back to the Protocol 1 peak: shift %s', mat2str(S3.center_shift_px)));
 cfg3 = jsondecode(fileread(fullfile(exp3, 'p3b', 'Reports', 'config.json')));

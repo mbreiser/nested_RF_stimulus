@@ -62,7 +62,7 @@ function S = run_session(exp_folder, varargin)
 %                    center_expected_ON_80ms_peak_mV, profiles_unimodal) feeds the decisions when present
 %     readout_dir    folder that already holds those files (dry run, resume)
 %     center         [] | [col row] | 'p1_peak'   the override (never prompted for)
-%     n_reps_stage2  3;  p2_bar_flash_pattern_id  [] = max(pattern_order)-1 (run_protocol2's slow bar-flash pattern)
+%     n_reps_stage2  3;  p2_bar_flash_pattern_id  [] = the pattern whose file name holds FLASHES (as run_protocol2)
 %     thresholds: p1_peak_floor_mV 2, pd_vector_length_floor 0.1, center_max_dist_px 6, center_max_offset_px 4,
 %                 peak_floor_mV 3
 %     ao_channel 2, ai_channels [] (the Host's AI TCP stream; [] = off, nothing reads it), adc_rates_hz [0 10000 10000 0], host_config_file, pretrial_s 2,
@@ -483,7 +483,7 @@ end
 
 function S = step_p2_stage1(S, opts)
 % Stage 1: the package is generated as today, but only the sweep conditions are run (every condition
-% whose pattern is not one of run_protocol2's two bar-flash patterns), n_reps_p2 repeats.
+% whose pattern is not the bar-flash pattern, the one named FLASHES), n_reps_p2 repeats.
 if isfield(S.out.p2a, 'folder') && ~isempty(S.out.p2a.folder) && isfolder(S.out.p2a.folder) && ...
         isfield(S.out.p2a, 'state') && strcmp(S.out.p2a.state, 'completed')
     say(S, 'Stage 1 already completed in %s', S.out.p2a.folder); return
@@ -497,9 +497,10 @@ else
     folder = generate_protocol2_package(S.out.p1_peak.frame, S.side, p2_metadata(S)); given = false;
 end
 P = p2_plan(folder, opts);
+for w = P.warnings, say(S, 'FLAG %s', w{1}); end
 rows = P.stage1_rows;
 S.steps(strcmp({S.steps.id}, 'p2a')).est_min = sum([rows.duration_s]) / 60;
-say(S, 'Protocol 2 stage 1: %d sweep rows x %d reps = %d rows, %.1f min (bar-flash patterns %s left for stage 2).', ...
+say(S, 'Protocol 2 stage 1: %d sweep rows x %d reps = %d rows, %.1f min (bar-flash pattern %s left for stage 2).', ...
     numel(P.stage1_idx), P.n_reps, numel(rows), sum([rows.duration_s])/60, mat2str(P.bar_flash_patterns));
 status = run_rows(opts, folder, rows, [], S);
 S.out.p2a = struct('folder', folder, 'mode', tern(given, 'given package, stage-1 rows', 'generated, stage-1 rows'), ...
@@ -566,6 +567,7 @@ if opts.dry_run && ~isfolder(fullfile(p2a, 'Patterns'))
     return
 end
 P = p2_plan(p2a, opts);
+if ~strcmp(mode, 'bars22'), for w = P.warnings, say(S, 'FLAG %s', w{1}); end, end
 if strcmp(mode, 'bars22')
     B = build_stage2_package(p2a, S.out.readout1.stage2_sequence, out_dir, P, opts, S.cell);
     rows = rows_from_package(out_dir);
@@ -1041,17 +1043,38 @@ end
 
 function P = p2_plan(folder, opts)
 % The condition list of a Protocol 2 package (currentExp.mat: pattern_order, func_order, trial_dur) split
-% into stage 1 (everything but the bar-flash patterns) and stage 2 (the bar-flash conditions as
-% run_protocol2 plays them: patterns max-1 / max, substituted by +1 / +2 on repeats 2 and 3).
+% into stage 1 (everything but the bar-flash pattern) and stage 2 (the bar-flash conditions as
+% run_protocol2 plays them: the pattern whose file name holds FLASHES, every repeat, with the -Rep<r>
+% position function of the same name on repeat r; func_order names the Rep1 functions).
 c = load(fullfile(folder, 'currentExp.mat'));
 if ~isfield(c, 'pattern_order'), error('run_session:p2', '%s has no pattern_order (not a create_protocol2 package)', folder); end
 po = double(c.pattern_order(:).'); fo = double(c.func_order(:).'); td = double(c.trial_dur(:).');
 n_reps = opts.n_reps_p2;
-slow = max(po) - 1; fast = max(po);
-if ~isempty(opts.p2_bar_flash_pattern_id), slow = opts.p2_bar_flash_pattern_id; fast = slow + 1; end
-is_bar = po == slow | po == fast;
-P = struct('pattern_order', po, 'func_order', fo, 'trial_dur', td, 'n_reps', n_reps, 'bar_flash_patterns', [slow fast], ...
-    'stage1_idx', find(~is_bar), 'stage2_idx', find(is_bar));
+[pat_ids, pat_names] = package_files(fullfile(folder, 'Patterns'));
+if isempty(opts.p2_bar_flash_pattern_id)
+    flash = pat_ids(contains(pat_names, 'FLASHES'));
+    if isempty(flash), error('run_session:p2', 'no pattern named FLASHES in %s (set p2_bar_flash_pattern_id)', fullfile(folder, 'Patterns')); end
+else
+    flash = double(opts.p2_bar_flash_pattern_id(:).');
+end
+is_bar = ismember(po, flash);
+[fn_ids, fn_names] = package_files(fullfile(folder, 'Functions'));
+rep_fn = repmat(fo, n_reps, 1); warn = {};
+for i = find(is_bar)
+    f1 = fn_names(fn_ids == fo(i));
+    if ~isscalar(f1) || isempty(regexp(f1{1}, 'Rep1(?!\d)', 'once')), continue, end
+    for r = 2:n_reps
+        k = find(strcmp(fn_names, regexprep(f1{1}, 'Rep1(?!\d)', sprintf('Rep%d', r))));
+        if isscalar(k)
+            rep_fn(r, i) = fn_ids(k);
+        else
+            warn{end+1} = sprintf('no Rep%d function for %s (cond %d); repeat %d plays the Rep1 function', r, f1{1}, i, r); %#ok<AGROW>
+        end
+    end
+end
+P = struct('pattern_order', po, 'func_order', fo, 'trial_dur', td, 'n_reps', n_reps, 'bar_flash_patterns', flash, ...
+    'stage1_idx', find(~is_bar), 'stage2_idx', find(is_bar), 'rep_functions', rep_fn);
+P.warnings = warn;
 % Protocol 2 packages carry trial durations such as 3.328 s; run_protocol2 plays them as
 % ceil(dur*10)-1 deciseconds, and so does the sequencer for these rows (never for the packages it builds).
 rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
@@ -1064,11 +1087,18 @@ P.stage1_rows = rows;
 rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
 for r = 1:n_reps
     for i = P.stage2_idx
-        pid = po(i) + (r - 1) * (r <= 3);         % run_protocol2: reps 2 and 3 use pattern +1 / +2
-        rows(end+1) = row_p2(sprintf('rep %d bars cond %d', r, i), pid, fo(i), td(i)); %#ok<AGROW>
+        rows(end+1) = row_p2(sprintf('rep %d bars cond %d', r, i), po(i), rep_fn(r, i), td(i)); %#ok<AGROW>
     end
 end
 P.stage2_rows_all88 = rows;
+end
+
+function [ids, names] = package_files(d)
+% IDs (the 4-digit file prefix) and names after the prefix of the .mat files in a package's Patterns\ or
+% Functions\ folder (the Rep1/Rep2/Rep3 functions differ in their prefix, so names are compared without it).
+f = dir(fullfile(d, '*.mat'));
+f = f(~cellfun(@isempty, regexp({f.name}, '^\d{4}_', 'once')));
+ids = cellfun(@(n) str2double(n(1:4)), {f.name}); names = cellfun(@(n) n(5:end), {f.name}, 'UniformOutput', false);
 end
 
 function r = row_p2(label, pattern_id, pfn_id, duration_s)

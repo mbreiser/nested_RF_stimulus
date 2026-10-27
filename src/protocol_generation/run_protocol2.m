@@ -40,8 +40,6 @@ function run_protocol2(exp_folder, pattern_order, func_order, trial_dur, n_reps)
     %% Experiment metadata from user input:
     % n_reps = 3;
     tic;
-    bar_flash_pattern_slow = max(pattern_order)-1; % The bar flash pattern is the last pattern.
-    bar_flash_pattern_fast = max(pattern_order);
     %% set up for experiment
     %Load configuration and start G4 Host
     % Check the use of this
@@ -53,7 +51,44 @@ function run_protocol2(exp_folder, pattern_order, func_order, trial_dur, n_reps)
     if ~exist(log_folder,'dir')
         mkdir(log_folder);
     end
-    
+
+    %% Position function per rep and condition
+    % The bar flash pattern is the one whose file name holds FLASHES; it is
+    % played every rep. Its position functions come in -Rep1/-Rep2/-Rep3
+    % versions (a different flash order each rep): func_order names the Rep1
+    % function, rep r uses the Rep<r> function of the same name.
+    % IDs are the 4-digit prefixes of the files in Patterns\ and Functions\.
+    pat_files = dir(fullfile(exp_folder, 'Patterns', '*.mat'));
+    pat_ids = cellfun(@(n) str2double(n(1:4)), {pat_files.name});
+    bar_flash_patterns = pat_ids(contains({pat_files.name}, 'FLASHES'));
+    func_files = dir(fullfile(exp_folder, 'Functions', '*.mat'));
+    func_ids = cellfun(@(n) str2double(n(1:4)), {func_files.name});
+    func_names = cellfun(@(n) n(5:end), {func_files.name}, 'UniformOutput', false);
+
+    rep_func = repmat(func_order(1,:), n_reps, 1);
+    for c = 1:num_conditions
+        if ~ismember(pattern_order(1,c), bar_flash_patterns)
+            continue
+        end
+        f1 = func_names{func_ids == func_order(1,c)};
+        if isempty(regexp(f1, 'Rep1(?!\d)', 'once'))
+            continue
+        end
+        for r = 2:n_reps
+            fr = regexprep(f1, 'Rep1(?!\d)', sprintf('Rep%d', r));
+            k = find(strcmp(func_names, fr));
+            if isscalar(k)
+                rep_func(r, c) = func_ids(k);
+            else
+                fprintf('WARNING: no function %s for rep %d of cond %d; using %s\n', fr, r, c, f1);
+            end
+        end
+    end
+    fprintf('Bar flash pattern(s): %s\n', mat2str(bar_flash_patterns));
+    for c = find(any(rep_func ~= func_order(1,:), 1))
+        fprintf('Cond %d (pattern %d): functions %s for reps 1-%d\n', c, pattern_order(1,c), mat2str(rep_func(:,c).'), n_reps);
+    end
+
     %% Open new Panels controller instance
     ctlr = PanelsController();
     ctlr.open(true);
@@ -76,34 +111,9 @@ function run_protocol2(exp_folder, pattern_order, func_order, trial_dur, n_reps)
         for c = 1:num_conditions
             %trial portion
             ctlr.setControlMode(1);
-
+            ctlr.setPatternID(pattern_order(1,c));
             % Use different position functions for bar flashes each rep.
-            if pattern_order(1,c) == bar_flash_pattern_slow
-                if r == 2  
-                    ctlr.setPatternID(bar_flash_pattern_slow+1);
-                elseif r == 3
-                    ctlr.setPatternID(bar_flash_pattern_slow+2);
-                else
-                    ctlr.setPatternID(pattern_order(1,c));
-                end 
-            else
-                ctlr.setPatternID(pattern_order(1,c));
-            end 
-
-            % Use different position functions for bar flashes each rep.
-            if pattern_order(1,c) == bar_flash_pattern_fast
-                if r == 2  
-                    ctlr.setPatternID(bar_flash_pattern_fast+1);
-                elseif r == 3
-                    ctlr.setPatternID(bar_flash_pattern_fast+2);
-                else
-                    ctlr.setPatternID(pattern_order(1,c));
-                end 
-            else
-                ctlr.setPatternID(pattern_order(1,c));
-            end
-
-            ctlr.setPatternFunctionID(func_order(1,c));
+            ctlr.setPatternFunctionID(rep_func(r,c));
             trial_t = trial_dur(1, c);
             fprintf(['Rep ', num2str(r), ' of ', num2str(n_reps), ', cond ' num2str(c) ' of ' num2str(num_conditions) ': ' strjoin(currentExp.pattern.pattNames(pattern_order(1,c))) '\n']);
             ctlr.startDisplay(ceil(trial_t*10)-1); %duration expected in 100ms units
