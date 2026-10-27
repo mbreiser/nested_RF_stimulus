@@ -101,8 +101,8 @@ V = struct('figure', fig, 'timer', tm, 'stop', @close_viewer);
             r.approx = true;
         end
         try
-            r.pats = load_pattern(find_file(fullfile(r.pkg, 'Patterns'), np.pattern_id));
-            F = load(find_file(fullfile(r.pkg, 'Functions'), np.pfn_id), 'pfnparam');
+            r.pats = load_pattern(find_file(r.pkg, 'Patterns', np.pattern_id));
+            F = load(find_file(r.pkg, 'Functions', np.pfn_id), 'pfnparam');
             r.func = double(F.pfnparam.func(:).');
         catch err
             r.err = err.message;
@@ -204,9 +204,19 @@ V = struct('figure', fig, 'timer', tm, 'stop', @close_viewer);
     end
 end
 
-function file = find_file(folder, id)
-d = dir(fullfile(folder, sprintf('%04d_*.mat', id)));
-if isempty(d), error('arena_viewer:file', 'No %04d_*.mat in %s', id, folder); end
+function file = find_file(pkg, kind, id)
+% The Host's pattern / function ID is the position in the sorted list of the folder's binaries (pat*.pat /
+% fun*.pfn); the .mat shown is the one with that binary's 4-digit number. Protocol 1 packages: ID 1 is
+% pat0002 (0002_*.mat); Protocol 2 and run_session packages: ID = file prefix. (currentExp.mat is no guide:
+% Protocol 2 lists one entry per condition and leaves out the Rep2/Rep3 functions.)
+folder = fullfile(pkg, kind);
+d = dir(fullfile(folder, tern(strcmp(kind, 'Patterns'), 'pat*.pat', 'fun*.pfn')));
+bins = sort({d.name});
+num = NaN;
+if id >= 1 && id <= numel(bins), num = str2double(regexp(bins{id}, '\d{4}', 'match', 'once')); end
+if isnan(num), num = id; end
+d = dir(fullfile(folder, sprintf('%04d_*.mat', num)));
+if isempty(d), error('arena_viewer:file', 'No %s ID %d (%04d_*.mat) in %s', kind, id, num, folder); end
 file = fullfile(d(1).folder, d(1).name);
 end
 
