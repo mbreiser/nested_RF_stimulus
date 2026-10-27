@@ -67,6 +67,12 @@ function S = run_session(exp_folder, varargin)
 %                 peak_floor_mV 3
 %     ao_channel 2, ai_channels [1 2], adc_rates_hz [0 10000 10000 0], host_config_file, pretrial_s 2,
 %     ao_zero_tail_s 0.1, dark_s 30, controller_factory, sim_speed 0, show_figures (= ~dry_run), auto_accept (= dry_run)
+%     show_status    (= show_figures)  the status window (SessionProgress): steps, estimates, clock times, the
+%                    current row and time left, the last FLAG; the time estimates are printed either way
+%     overview_plots true   after every recorded step, SESSION_STEP_OVERVIEW of its log (Vm, drift, frames,
+%                    current), shown when show_figures and saved as EXP_FOLDER/plots/<k>_<step>_overview.png
+%   Each row also rewrites EXP_FOLDER/now_playing.json (package, row, pattern/function/AO IDs, duration,
+%   start time): what the arena is playing, for a display viewer.
 %
 %   Conventions: arena columns 17..192 and rows 1..48, 1-based, row 1 at the top; background 4, ON 15,
 %   OFF 0; s is positive toward the PD (the trailing / proximal side), v is + 90 deg clockwise from the
@@ -109,7 +115,10 @@ if opts.abandon
     return
 end
 
-print_checklist(S);
+print_checklist(S, opts.steps);
+% the status window and the time estimates (SessionProgress.m); FLAG lines also go to the window
+opts.progress = SessionProgress(S, opts.show_status, opts.steps);
+active_progress(opts.progress);
 
 % ---------------------------------------------------------------- run the steps in order
 for k = 1:numel(S.steps)
@@ -131,6 +140,7 @@ for k = 1:numel(S.steps)
     S.steps(k).status = 'running'; S.steps(k).t_start = iso_now(); S.steps(k).note = '';
     save_state(S, state_file);
     say(S, '---- %d/%d  %s  (%s, about %.1f min) ----', k, numel(S.steps), st.id, st.label, st.est_min);
+    opts.progress.step_start(S, k);
     t0 = tic;
     try
         switch st.id
@@ -153,18 +163,21 @@ for k = 1:numel(S.steps)
             S.steps(k).status = 'skipped'; S.steps(k).note = err.message;
             save_state(S, state_file);
             say(S, 'Step %s skipped: %s', st.id, err.message);
+            opts.progress.step_end(S, k);
             continue
         elseif strcmp(err.identifier, 'run_session:stop')
             S.steps(k).status = 'interrupted'; S.steps(k).note = err.message;
             save_state(S, state_file);
             say(S, 'FLAG session stopped at %s: %s', st.id, err.message);
-            print_checklist(S); print_decisions(S);
+            opts.progress.step_end(S, k);
+            print_checklist(S, opts.steps); print_decisions(S);
             return
         end
         S.steps(k).status = 'failed'; S.steps(k).note = sprintf('%s: %s', err.identifier, err.message);
         save_state(S, state_file);
         say(S, 'Step %s FAILED: %s', st.id, err.message);
-        print_checklist(S);
+        opts.progress.step_end(S, k);
+        print_checklist(S, opts.steps);
         rethrow(err);
     end
     S.steps(k).elapsed_s = toc(t0);
@@ -172,11 +185,16 @@ for k = 1:numel(S.steps)
     if strcmp(S.steps(k).status, 'running'), S.steps(k).status = 'done'; end
     save_state(S, state_file);
     say(S, 'Step %s done in %.1f min.', st.id, S.steps(k).elapsed_s/60);
+    opts.progress.step_end(S, k);
+    if strcmp(S.steps(k).status, 'done') && opts.overview_plots
+        S = step_overview(S, opts, k);
+        save_state(S, state_file);
+    end
 end
 
 S.finished = iso_now();
 save_state(S, state_file);
-print_checklist(S); print_decisions(S);
+print_checklist(S, opts.steps); print_decisions(S);
 say(S, 'Session complete. State: %s', state_file);
 end
 
@@ -191,7 +209,7 @@ d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', ''
     'p1_peak_floor_mV', 2, 'pd_vector_length_floor', 0.1, 'center_max_dist_px', 6, 'center_max_offset_px', 4, ...
     'peak_floor_mV', 3, 'auto_accept', [], 'show_figures', [], 'ao_channel', 2, 'ai_channels', [1 2], ...
     'adc_rates_hz', [0 10000 10000 0], 'host_config_file', '', 'pretrial_s', 2, 'ao_zero_tail_s', 0.1, 'dark_s', 30, ...
-    'controller_factory', [], 'sim_speed', 0, 'verbose_mock', false);
+    'controller_factory', [], 'sim_speed', 0, 'verbose_mock', false, 'show_status', [], 'overview_plots', true);
 if numel(varargin) == 1 && isstruct(varargin{1})
     given = varargin{1};
 else
@@ -207,6 +225,7 @@ end
 if ~ismember(o.p2_mode, {'two_stage', 'full'}), error('run_session:options', 'p2_mode must be two_stage or full'); end
 if isempty(o.auto_accept), o.auto_accept = o.dry_run; end
 if isempty(o.show_figures), o.show_figures = ~o.dry_run; end
+if isempty(o.show_status), o.show_status = o.show_figures; end
 if isempty(o.steps), o.steps = step_ids(o.p2_mode); end
 o.steps = cellstr(o.steps);
 if isstring(o.cell), o.cell = char(o.cell); end
@@ -284,7 +303,7 @@ if ~isempty(opts.p2b_folder) && isfield(S.out, 'p2b'), S.out.p2b.folder = opts.p
 end
 
 function o = opts_for_state(opts)
-o = rmfield(opts, {'controller_factory', 'readout_fn', 'p1_readout_fn'});
+o = rmfield(opts, intersect(fieldnames(opts), {'controller_factory', 'readout_fn', 'p1_readout_fn', 'progress'}));
 end
 
 function S = load_state(f)
@@ -362,7 +381,7 @@ checked('startLog', ctlr.startLog());
 checked('allOff', ctlr.allOff());
 t_wait = tern(opts.dry_run, opts.dark_s * opts.sim_speed, opts.dark_s);
 for s = t_wait:-5:0.01
-    fprintf('    dark: %4.0f s left\r', s); pause(min(5, s));
+    fprintf('    dark: %4.0f s left\r', s); opts.progress.countdown(s, t_wait, 'dark, 0 pA'); pause(min(5, s));
 end
 fprintf('\n');
 ctx('done') = true;
@@ -413,7 +432,7 @@ if ~isempty(opts.peak_frame)
     R.frame = opts.peak_frame; R.source = 'override (peak_frame option)';
 else
     fn = opts.p1_readout_fn;
-    if isempty(fn) && exist('rapid_p1_peak', 'file') == 2, fn = @(f, o) rapid_p1_peak(f, 'Out', o, 'Cell', S.cell); end
+    if isempty(fn) && exist('rapid_p1_peak', 'file') == 2, fn = @(f, o) rapid_p1_peak(f, 'Out', o, 'Cell', S.cell, 'Figure', opts.show_figures); end
     if isempty(fn)
         error('run_session:stop', 'no Protocol 1 read-out on the path (rapid_p1_peak.m) and no peak_frame override');
     end
@@ -496,6 +515,8 @@ function S = step_readout1(S, opts)
 out_dir = fullfile(S.exp_folder, 'readout'); if ~isfolder(out_dir), mkdir(out_dir); end
 tag = S.cell;
 method = call_readout(1, S, opts, out_dir);
+% rapid_readout.m draws the tuning figure itself (and writes <cell>_stage1.png); other methods: show the PNG if any
+if ~strcmp(method, 'rapid_readout.m'), show_readout_figure(opts, fullfile(out_dir, [tag '_stage1.png'])); end
 js = fullfile(out_dir, [tag '_stage1.json']); seq = fullfile(out_dir, [tag '_stage2_sequence.csv']);
 if ~isfile(js), error('run_session:readout', 'Read-out call 1 did not write %s', js); end
 J = jsondecode(fileread(js));
@@ -581,7 +602,7 @@ if ~isempty(R.summary.placement)
         getf(R.summary.placement, 'pd_rule', ''), num2str(getf(R.summary.placement, 'pd_deg', []))), false, ...
         tern(getf(R.summary.placement, 'pd_flag_gt5', false), '28/56 disagree > 5 deg', ''));
 end
-show_readout_figure(opts, fullfile(out_dir, [tag '_locations.png']));
+if ~strcmp(method, 'rapid_readout.m'), show_readout_figure(opts, fullfile(out_dir, [tag '_locations.png'])); end   % rapid_readout.m drew it
 
 % ---- decision (c)/(f): the center
 center = R.summary.center_col_row(:).';
@@ -807,11 +828,17 @@ try
     ctx('log') = true;
     checked('startLog', ctlr.startLog());
     status.state = 'running'; write_json(status_file, status);
+    done_s = [0 cumsum([rows.duration_s])];                     % programmed seconds before each row
+    opts.progress.refresh(S);                                   % the step's estimate from its rows
     for k = 1:numel(rows)
         r = rows(k);
-        fprintf('    row %3d/%d  %-26s pat %d  pfn %d%s  %6.1f s\n', k, numel(rows), r.label, r.pattern_id, r.pfn_id, ...
-            tern(isempty(ao_channel), '', sprintf('  afn %d', r.afn_id)), r.duration_s);
+        prog = opts.progress.row(k, numel(rows), r.label, done_s(k), done_s(end));
+        fprintf('    row %3d/%d  %-26s pat %d  pfn %d%s  %6.1f s  %s\n', k, numel(rows), r.label, r.pattern_id, r.pfn_id, ...
+            tern(isempty(ao_channel), '', sprintf('  afn %d', r.afn_id)), r.duration_s, prog);
         status.rows(k).started = iso_now(); t_row = tic;
+        % what the arena is playing now, for a display viewer (one small file, rewritten per row)
+        write_json(fullfile(S.exp_folder, 'now_playing.json'), struct('package', pkg, 'row', k, 'n_rows', numel(rows), ...
+            'label', r.label, 'pattern_id', r.pattern_id, 'pfn_id', r.pfn_id, 'afn_id', r.afn_id, 'duration_s', r.duration_s, 'started', status.rows(k).started));
         checked('setControlMode', ctlr.setControlMode(1));
         checked('setPatternID', ctlr.setPatternID(r.pattern_id));
         checked('setPatternFunctionID', ctlr.setPatternFunctionID(r.pfn_id));
@@ -1408,10 +1435,12 @@ end
 % =========================================================================================
 % console, files, small helpers
 % =========================================================================================
-function print_checklist(S)
+function print_checklist(S, selected)
+% 'ends ~' is the expected clock time of the end of each selected pending step if the session ran now
+if nargin < 2, selected = {S.steps.id}; end
 fprintf('\n  Session %s  (%s)%s  p2_mode %s\n', S.cell, S.exp_folder, tern(S.dry_run, '  [DRY RUN]', ''), S.p2_mode);
-fprintf('  %-3s %-9s %-11s %-8s %8s %7s  %s\n', '#', 'step', 'status', 'start', 'elapsed', 'est', 'note');
-tot = 0;
+fprintf('  %-3s %-9s %-11s %-8s %8s %7s  %-7s %s\n', '#', 'step', 'status', 'start', 'elapsed', 'est', 'ends', 'note');
+tot = 0; ahead = 0;
 for k = 1:numel(S.steps)
     st = S.steps(k);
     t0 = ''; if ~isempty(st.t_start), t0 = st.t_start(12:19); end
@@ -1423,15 +1452,59 @@ for k = 1:numel(S.steps)
         case {'failed', 'interrupted'}, mark = '!';
         case 'skipped', mark = '-';
     end
-    fprintf('  %s%-2d %-9s %-11s %-8s %8s %5.1f    %s\n', mark, k, st.id, st.status, t0, el, st.est_min, st.note);
+    ends = '';
+    if any(strcmp(st.status, {'pending', 'running', 'failed', 'interrupted'})) && ismember(st.id, selected)
+        ahead = ahead + st.est_min * 60; ends = ['~' char(datetime('now') + seconds(ahead), 'HH:mm')];
+    end
+    fprintf('  %s%-2d %-9s %-11s %-8s %8s %5.1f    %-7s %s\n', mark, k, st.id, st.status, t0, el, st.est_min, ends, st.note);
 end
-fprintf('  elapsed so far %.1f min\n\n', tot/60);
+if ahead > 0
+    fprintf('  elapsed so far %.1f min; about %.0f min to go, finish ~%s\n\n', tot/60, ahead/60, char(datetime('now') + seconds(ahead), 'HH:mm'));
+else
+    fprintf('  elapsed so far %.1f min\n\n', tot/60);
+end
+end
+
+function p = active_progress(p_in)
+% the session's SessionProgress, so that say() can put FLAG lines into the window
+persistent P
+if nargin, P = p_in; end
+p = P;
+end
+
+function S = step_overview(S, opts, k)
+% After a recorded step: SESSION_STEP_OVERVIEW of its log (Vm, drift, frames, current), shown and saved in
+% <exp_folder>/plots. Never stops the session: a failure is printed as a FLAG and the session goes on.
+id = S.steps(k).id;
+if ~ismember(id, {'dark30', 'p1', 'p2', 'p2a', 'p2b', 'p3b', 'p4'}), return; end
+folder = ''; if isfield(S.out, id) && isfield(S.out.(id), 'folder'), folder = S.out.(id).folder; end
+if isempty(folder) || isempty(dir(fullfile(folder, 'Log Files', '**', '*.tdms')))
+    say(S, 'Overview %s: no TDMS log in %s%s', id, folder, tern(opts.dry_run, ' (dry run: the mock writes none)', ''));
+    return
+end
+if exist('session_step_overview', 'file') ~= 2 || exist('fast_tdms_folder2struct', 'file') ~= 2
+    say(S, 'FLAG overview %s skipped: session_step_overview / fast_tdms_folder2struct not on the path', id); return
+end
+try
+    png = fullfile(S.exp_folder, 'plots', sprintf('%02d_%s_overview.png', k, id));
+    O = session_step_overview(folder, 'Title', sprintf('%s  %d/%d  %s - %s', S.cell, k, numel(S.steps), id, S.steps(k).label), ...
+        'Png', png, 'Figure', opts.show_figures, 'Name', sprintf('Step %s overview', id));
+    S.out.(id).overview = O.summary; S.out.(id).overview.png = png;
+    say(S, 'Overview %s (%.1f s): %s', id, O.seconds, O.line);
+    if abs(O.summary.vm_drift_mV) > 5, say(S, 'FLAG %s: Vm drifted %+.1f mV over the step', id, O.summary.vm_drift_mV); end
+catch err
+    say(S, 'FLAG overview %s failed: %s', id, err.message);
+end
 end
 
 function say(S, fmt, varargin)
 msg = sprintf(fmt, varargin{:});
 line = sprintf('[%s] %s', char(datetime('now', 'Format', 'HH:mm:ss')), msg);
 fprintf('%s\n', line);
+if contains(msg, 'FLAG') || contains(msg, 'FAILED')
+    p = active_progress();
+    if ~isempty(p) && isvalid(p), p.note(line); end
+end
 try
     fid = fopen(fullfile(S.exp_folder, 'session_log.txt'), 'a'); fprintf(fid, '%s %s\n', char(datetime('now', 'Format', 'yyyy-MM-dd')), line); fclose(fid);
 catch

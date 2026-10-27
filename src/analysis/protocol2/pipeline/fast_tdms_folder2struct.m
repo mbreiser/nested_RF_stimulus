@@ -70,7 +70,7 @@ function [Log, info] = fast_tdms_folder2struct(exp_folder, varargin)
     AOTime = {}; AOVolts = {}; AOChannels = {};
     FrameTime = {}; FramePosition = {};
     CommandTime = []; CommandName = {}; CommandData = {};
-    info = struct('tdms_folder', tdms_folder, 'files', {names}, 'read_seconds', zeros(1, n), 'layout', '', 'total_seconds', NaN);
+    info = struct('tdms_folder', tdms_folder, 'files', {names}, 'read_seconds', zeros(1, n), 'layout', '', 'total_seconds', NaN, 'empty_files', {{}});
 
     for i = 1:n
         fn = names{i};
@@ -93,6 +93,11 @@ function [Log, info] = fast_tdms_folder2struct(exp_folder, varargin)
             chan = str2double(fn(strfind(fn, 'AO') + 2));
             group = ['AO' num2str(chan - 2)];
             [chans, data] = read_tdms_group(path, group);
+            if isempty(chans)
+                % an AO channel set active but never driven leaves a header-only file (Prot3, 2 Oct 2026): no AO data
+                info.empty_files{end+1} = fn; info.read_seconds(i) = toc(t0);
+                continue
+            end
             x = first_data(chans, data, path, group);
             if contains(fn, 'Time')
                 AOTime{end+1} = x(:)'; %#ok<AGROW>

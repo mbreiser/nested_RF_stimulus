@@ -187,8 +187,18 @@ function R = rapid_readout(session_folder, varargin)
         fid = fopen(fullfile(opts.Out, [tag '_stage1.json']), 'w'); fprintf(fid, '%s', jsonencode(out, 'PrettyPrint', true)); fclose(fid);
         write_csv(fullfile(opts.Out, [tag '_stage2_bars.csv']), bars, {'set', 'bar_orientation_deg', 'bar_pattern_frame_1based', 'rank_along_axis', 'col_center', 'row_center'}, {'bar_pattern_frame_1based', 'rank_along_axis'});
         write_csv(fullfile(opts.Out, [tag '_stage2_sequence.csv']), seq2, {'repeat', 'cls', 'order', 'bar_pattern_frame_1based', 'flash_ms', 'gray_ms', 't_start_s'}, {'repeat', 'order', 'bar_pattern_frame_1based', 'flash_ms', 'gray_ms'});
-        fprintf('written: %s\n', fullfile(opts.Out, [tag '_{stage1.json,stage2_bars.csv,stage2_sequence.csv}']));
-        R = struct('cell', tag, 'sid', sid, 'session_folder', session_folder, 'stage', 1, 'S', S, 'A', A, 'placement', pp, 'bar_sets', bs, 'stage2_bars', bars, 'stage2_sequence', seq2, ...
+        fig = [];
+        if opts.Figure
+            P = struct('cell', tag, 'dirs', A.dirs, 'amp28', A.amp28, 'amp56', A.amp56, 'pd_vector_28', pp.pd_vector_28, 'pd_vector_56', pp.pd_vector_56, ...
+                       'pd_placement', pp.pd_placement, 'pd_snapped', A.pd, 'vector_length_28', pp.vector_length_28, 'vector_length_56', pp.vector_length_56, ...
+                       'pd_rule', pp.pd_rule, 'pd_flag_gt5', pp.pd_flag_gt5, 'usable_pd', pp.usable_pd);
+            P.traces28 = sweep_traces28(E, A.dirs);
+            fig = plot_rapid_stage1(P);
+            if opts.SavePng, exportgraphics(fig, fullfile(opts.Out, [tag '_stage1.png']), 'Resolution', 100); end
+        end
+        png = ''; if opts.Figure && opts.SavePng, png = ',stage1.png'; end
+        fprintf('written: %s\n', fullfile(opts.Out, [tag '_{stage1.json,stage2_bars.csv,stage2_sequence.csv' png '}']));
+        R = struct('cell', tag, 'figure', fig, 'sid', sid, 'session_folder', session_folder, 'stage', 1, 'S', S, 'A', A, 'placement', pp, 'bar_sets', bs, 'stage2_bars', bars, 'stage2_sequence', seq2, ...
                    'validation', val, 'json', out, 'timing', struct('read_s', t_read, 'analysis_s', t_analysis, 'total_s', toc(t_all), 'read_info', info), 'out_dir', opts.Out);
         return;
     end
@@ -451,6 +461,24 @@ function E = extract_events(S)
                     E.fl80{v}{end+1} = struct('tr', tr, 'raw', raw);
                 end
         end
+    end
+end
+
+function T = sweep_traces28(E, dirs)
+% repeat-mean Vm of the 28 deg/s sweeps per direction for the stage-1 figure: aligned at motion onset,
+% baseline as in analyse (mean over -0.9..-0.1 s, or the whole pre-motion part when shorter), 1 kHz
+    T = cell(1, numel(dirs));
+    for i = 1:numel(dirs)
+        key = sprintf('%.4f', dirs(i));
+        if ~isKey(E.sw28, key), continue; end
+        lst = E.sw28(key);
+        pre_n = min(cellfun(@(x) x.raw_on, lst)); post_n = min(cellfun(@(x) numel(x.raw) - x.raw_on, lst));
+        M = zeros(numel(lst), pre_n + post_n);
+        for r = 1:numel(lst), M(r, :) = double(lst{r}.raw(lst{r}.raw_on - pre_n + 1:lst{r}.raw_on + post_n)); end
+        m = mean(M, 1); o = pre_n;
+        if o > 1000, bl = mean(m(max(o - 9000, 0) + 1:o - 1000)); else, bl = mean(m(1:o)); end
+        k = 1:10:numel(m);
+        T{i} = struct('t_s', (k - o) / 1e4, 'vm_mV', m(k) - bl, 'motion_s', min(cellfun(@(x) x.motion_n, lst)) / 1e4);
     end
 end
 
