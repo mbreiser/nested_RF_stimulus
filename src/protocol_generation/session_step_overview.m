@@ -56,7 +56,7 @@ if isempty(rows), rows = struct('t0', t0, 't1', tick(end), 'pid', NaN); end
 
 % ---- per-row Vm (1 kHz) and frame changes
 v1k = vm(1:10:end); t1k = tick(1:10:end);
-fr_t = double(Log.Frames.Time(1, :)); fr_p = double(Log.Frames.Position(1, :));
+if isempty(Log.Frames.Time), fr_t = []; fr_p = []; else, fr_t = double(Log.Frames.Time(1, :)); fr_p = double(Log.Frames.Position(1, :)); end
 nr = numel(rows); med = nan(1, nr); lo = med; hi = med; nchg = zeros(1, nr); rmid = med;
 for j = 1:nr
     w = t1k >= rows(j).t0 & t1k < rows(j).t1;

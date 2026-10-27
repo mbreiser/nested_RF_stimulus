@@ -853,6 +853,7 @@ try
     status.state = 'completed';
 catch err
     status.error = sprintf('%s: %s', err.identifier, err.message);
+    status.ibuf_dump = dump_reply_buffer(ctlr, rep_dir);         % before the cleanup adds its own replies
     status.cleanup = controller_cleanup(ctx);
     status.state = 'failed'; status.finished = iso_now(); status.elapsed_s = toc(t_run);
     write_json(status_file, status);
@@ -860,6 +861,24 @@ catch err
 end
 status.finished = iso_now(); status.elapsed_s = toc(t_run);
 write_json(status_file, status);
+end
+
+function f = dump_reply_buffer(ctlr, rep_dir)
+% Diagnostic for the intermittent 'Index exceeds ... must not exceed 1' inside PanelsController (a reply
+% parsed as one byte; Prot3 2 and 6 Oct, the arena run of 27 Oct): save the controller's private TCP input
+% buffer (iBuf) as it was at the failure, as .mat and as hex text. Read only; '' when there is none (mock).
+f = '';
+try
+    w = warning('off', 'MATLAB:structOnObject'); s = struct(ctlr); warning(w);
+    if ~isfield(s, 'iBuf'), return; end
+    ibuf = s.iBuf; %#ok<NASGU>
+    stamp = char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
+    f = fullfile(rep_dir, ['ibuf_at_failure_' stamp]);
+    save([f '.mat'], 'ibuf');
+    write_text([f '.txt'], sprintf('%d bytes\n%s\n', numel(s.iBuf), strjoin(cellstr(dec2hex(s.iBuf, 2)).', ' ')));
+    f = [f '.mat'];
+catch
+end
 end
 
 function steps = controller_cleanup(ctx)

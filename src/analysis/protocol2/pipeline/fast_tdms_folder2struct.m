@@ -110,6 +110,11 @@ function [Log, info] = fast_tdms_folder2struct(exp_folder, varargin)
         elseif contains(fn, 'Frame')
             group = 'Pattern Position';
             [chans, data] = read_tdms_group(path, group);
+            if isempty(chans)
+                % no pattern displayed while logging (the dark period, allOff) leaves header-only frame files
+                info.empty_files{end+1} = fn; info.read_seconds(i) = toc(t0);
+                continue
+            end
             x = first_data(chans, data, path, group);   % 'X Index' (position) or 'Time'
             if contains(fn, 'Position')
                 FramePosition{end+1} = x(:)'; %#ok<AGROW>
