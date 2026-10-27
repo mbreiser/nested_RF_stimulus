@@ -188,7 +188,29 @@ catch err
     check(strcmp(err.identifier, 'run_session:duration'), sprintf('2.05 s pretrial refused (%s)', err.identifier));
 end
 
+%% 9. End of session: allOff after the last step's cleanup (panels dark), only when an arena step ran
+check(isfield(S2.out, 'arena_off') && S2.out.arena_off.ok && isequal({S2.out.arena_off.steps.step}, {'open', 'allOff', 'close'}), 'two-stage session ends with open, allOff, close (panels dark)');
+mocks = containers.Map('KeyType', 'double', 'ValueType', 'any');
+S9 = run_session(fullfile(scratch, 'cell_H_dark'), 'dry_run', true, 'cell', 'JY1008', 'steps', {'dark30'}, 'controller_factory', @() new_mock(mocks, struct()));
+c1 = mocks(1).methodsCalled(); c2 = mocks(2).methodsCalled();
+check(mocks.Count == 2 && strcmp(c1{end}, 'close') && isequal(c2, {'open', 'allOff', 'close'}) && S9.out.arena_off.ok, 'allOff on a new connection after the step''s cleanup closed');
+mocks = containers.Map('KeyType', 'double', 'ValueType', 'any');
+run_session(exp5, 'dry_run', true, 'readout_dir', readout_dir, 'steps', {'readout', 'build'}, 'analysis_repo', analysis_repo, 'controller_factory', @() new_mock(mocks, struct()));
+check(mocks.Count == 0, 'no arena step in the call (all done): no controller, no allOff');
+mocks = containers.Map('KeyType', 'double', 'ValueType', 'any');
+S10 = run_session(fullfile(scratch, 'cell_I_off_fails'), 'dry_run', true, 'cell', 'JY1008', 'steps', {'dark30'}, ...
+    'controller_factory', @() new_mock(mocks, struct(), struct('fail_method', 'allOff', 'fail_on_call', 1, 'fail_mode', 'false')));
+lg = fileread(fullfile(scratch, 'cell_I_off_fails', 'session_log.txt'));
+check(~S10.out.arena_off.ok && ~isempty(S10.finished) && contains(lg, 'FLAG arena not turned off'), 'allOff returning false: flagged, session still completes');
+
 fprintf('\n%d check(s) failed. Output in %s\n', NFAIL, scratch);
+
+function m = new_mock(store, o, o_later)
+% a SessionMockController kept in STORE (containers.Map, a handle), numbered in creation order;
+% O_LATER (optional) replaces O from the second controller on (the end-of-session allOff)
+if nargin > 2 && store.Count >= 1, o = o_later; end
+m = SessionMockController(o); store(store.Count + 1) = m;
+end
 
 function check(cond, msg)
     global NFAIL

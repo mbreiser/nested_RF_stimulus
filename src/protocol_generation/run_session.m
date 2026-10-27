@@ -40,6 +40,8 @@ function S = run_session(exp_folder, varargin)
 %   left running, failed or interrupted is re-run (its old logs are moved aside). Each protocol runs in
 %   its own package folder under EXP_FOLDER (p1/, p2a/ or p2/, p2b/, p3b/, p4/) with its own 'Log Files'
 %   and Reports/ ledgers, so the analysis sees the same per-protocol layout as before.
+%   Between steps the arena stays on the gray background (each step's cleanup), so the mean luminance does
+%   not change; when the session completes after an arena step, allOff turns the panels dark (S.out.arena_off).
 %
 %   OPTIONS (name/value or one struct):
 %     dry_run        false   SessionMockController instead of PanelsController; no G4 Host, no arena, no
@@ -121,6 +123,7 @@ opts.progress = SessionProgress(S, opts.show_status, opts.steps);
 active_progress(opts.progress);
 
 % ---------------------------------------------------------------- run the steps in order
+ran_arena = false;                                              % an arena step ran in this call
 for k = 1:numel(S.steps)
     st = S.steps(k);
     if ~ismember(st.id, opts.steps)
@@ -183,6 +186,7 @@ for k = 1:numel(S.steps)
     S.steps(k).elapsed_s = toc(t0);
     S.steps(k).t_end = iso_now();
     if strcmp(S.steps(k).status, 'running'), S.steps(k).status = 'done'; end
+    ran_arena = ran_arena || ismember(st.id, {'dark30', 'p1', 'p2', 'p2a', 'p2b', 'p3b', 'p4'});
     save_state(S, state_file);
     say(S, 'Step %s done in %.1f min.', st.id, S.steps(k).elapsed_s/60);
     opts.progress.step_end(S, k);
@@ -192,10 +196,28 @@ for k = 1:numel(S.steps)
     end
 end
 
+if ran_arena, S = arena_off(S, opts); end
 S.finished = iso_now();
 save_state(S, state_file);
 print_checklist(S, opts.steps); print_decisions(S);
 say(S, 'Session complete. State: %s', state_file);
+end
+
+function S = arena_off(S, opts)
+% End of the session: the last step's cleanup left the gray background up; allOff turns the panels dark.
+% Guarded: a failure is flagged and recorded, the completed session is not failed by it.
+ctlr = opts.controller_factory();
+steps = guarded('open', @() noret(@() ctlr.open(true)));
+if steps(1).ok, steps(end+1) = guarded('allOff', @() ctlr.allOff()); end
+steps(end+1) = guarded('close', @() noret(@() ctlr.close()));
+ok = numel(steps) == 3 && all([steps.ok]);
+S.out.arena_off = struct('ok', ok, 'time', iso_now(), 'steps', steps);
+if ok
+    say(S, 'Arena off (allOff): panels dark.');
+else
+    bad = steps(~[steps.ok]);
+    say(S, 'FLAG arena not turned off (%s: %s); switch it off by hand.', bad(1).step, bad(1).detail);
+end
 end
 
 % =========================================================================================
