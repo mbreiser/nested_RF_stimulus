@@ -15,7 +15,8 @@ function R = rapid_p1_peak(p1_folder, varargin)
 %
 %   R fields: frame (ON peak frame, 1-based, as the Protocol 1 'Frame' noted in
 %   the experiment log), xy (its center, 1-based [col row]), peak_mV, polarity
-%   ('ON'), frame12 = [ON OFF] peak frames, peak12_mV = [ON OFF] peak dV, ON and
+%   ('ON'), frame12 = [ON OFF] peak frames, peak12_mV = [ON OFF] peak dV (both of
+%   the grid analysed, not of the 12-px grid: the names are historical), ON and
 %   OFF (frame_1based, xy, peak_mV, neg_mV, snr_single, snr_mean,
 %   noise_single_mV), rows (the map table), n_flashes, n_repeats, layout,
 %   pattern, timing, out_dir. Files in 'Out': <cell>_p1_summary.json,
@@ -24,9 +25,10 @@ function R = rapid_p1_peak(p1_folder, varargin)
 %   dV_sd_across_repeats_mV) and <cell>_p1_maps.png.
 %
 %   Options: 'Out' (default <p1_folder>/rapid_readout), 'Cell' (default: the
-%   folder name), 'Pattern' (path of the 6-px square pattern .mat; default: the
-%   first *square*.mat under Patterns/ of P1_FOLDER, its parent or
-%   grandparent, where the Protocol 1 root keeps it), 'Figure' (true),
+%   folder name), 'Pattern' (path of the square pattern .mat whose grid is
+%   analysed; default: the *6px*square*.mat, else the first *square*.mat, under
+%   Patterns/ of P1_FOLDER, its parent or grandparent, where the Protocol 1
+%   root keeps it; give the 12-px pattern for the 12-px map), 'Figure' (true),
 %   'SavePng' (true).
 %
 %   Both channel layouts are handled (historic ADC0 frame index / ADC1 Vm;
@@ -56,7 +58,10 @@ function R = rapid_p1_peak(p1_folder, varargin)
         cands = {p1_folder, fileparts(p1_folder), fileparts(fileparts(p1_folder))};
         for c = 1:numel(cands)
             d = dir(fullfile(cands{c}, 'Patterns', '*square*.mat'));
-            if ~isempty(d), [~, i] = sort({d.name}); pat_path = fullfile(d(i(1)).folder, d(i(1)).name); break; end
+            if isempty(d), continue; end
+            nms = sort({d.name}); i6 = find(contains(nms, '6px') & ~contains(nms, '12px'), 1);   % the 6-px grid, also in 12px_6px packages
+            if isempty(i6), i6 = 1; end
+            pat_path = fullfile(d(1).folder, nms{i6}); break
         end
     end
     assert(~isempty(pat_path) && isfile(pat_path), 'rapid_p1_peak:NoPattern', 'no square pattern .mat found; give ''Pattern''');

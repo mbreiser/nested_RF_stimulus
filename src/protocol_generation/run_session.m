@@ -52,8 +52,9 @@ function S = run_session(exp_folder, varargin)
 %     steps          all     cellstr of step ids to run; others are marked 'skipped (not selected)'
 %     p1_mode        'sequencer' | 'conductor' | 'skip';  p1_package  the pre-made Protocol 1 package folder
 %     p1_folder      an existing Protocol 1 results folder (resume / conductor mode)
-%     p1_readout_fn  @(p1_folder, out_dir) -> struct(frame, xy, peak_mV, polarity, frame12, peak12_mV, ...)
-%                    default rapid_p1_peak when on the path
+%     p1_readout_fn  @(p1_folder, out_dir, pattern) -> struct(frame, xy, peak_mV, ...) of the ON peak on the
+%                    grid of PATTERN (the .mat of the 6-px, or for the fallback the 12-px, square pattern);
+%                    a two-argument function is called without the pattern. Default rapid_p1_peak.
 %     peak_frame     Protocol 1 ON peak frame (6-px grid) given by hand: an OVERRIDE, logged
 %     p2_folder      an existing Protocol 2 package (stage 1 or full), p2b_folder an existing stage-2 package
 %     p2_package_root  'C:\matlabroot\G4_Protocols\nested_RF_protocol2'  where a generated Protocol 2 package
@@ -454,42 +455,53 @@ out_dir = fullfile(S.exp_folder, 'readout'); if ~isfolder(out_dir), mkdir(out_di
 pkg = '';
 if isfield(S.out.p1, 'package_source') && ~isempty(S.out.p1.package_source), pkg = S.out.p1.package_source; end
 if isfield(S.out.p1, 'folder') && ~isempty(S.out.p1.folder) && isfolder(fullfile(S.out.p1.folder, 'Patterns')), pkg = S.out.p1.folder; end
-R = struct('frame', [], 'xy', [], 'peak_mV', [], 'polarity', '', 'frame12', [], 'peak12_mV', [], 'source', '');
+% The frame is a frame of the grid that was analysed (R.grid_px, R.pattern); Protocol 2 is aimed at
+% R.aim_xy / R.aim_polarity, the median pixel of that frame of that pattern (as patt_frame_to_coord).
+p1f = ''; if isfield(S.out.p1, 'folder') && ~isempty(S.out.p1.folder), p1f = char(S.out.p1.folder); end
+[pat6, pat12] = p1_square_patterns({pkg, p1f, fileparts(p1f), fileparts(fileparts(p1f))});   % where rapid_p1_peak looks too
+R = struct('frame', [], 'xy', [], 'peak_mV', [], 'polarity', '', 'grid_px', 6, 'pattern', pat6, 'aim_xy', [], 'aim_polarity', '', ...
+    'peak_6px_mV', [], 'peak_12px_mV', [], 'source', '');
+flags = '';
+fallback = false;
 if ~isempty(opts.peak_frame)
-    R.frame = opts.peak_frame; R.source = 'override (peak_frame option)';
+    R.frame = opts.peak_frame; R.source = 'override (peak_frame option, 6-px grid)';
 else
     fn = opts.p1_readout_fn;
-    if isempty(fn) && exist('rapid_p1_peak', 'file') == 2, fn = @(f, o) rapid_p1_peak(f, 'Out', o, 'Cell', S.cell, 'Figure', opts.show_figures); end
+    if isempty(fn) && exist('rapid_p1_peak', 'file') == 2, fn = @(f, o, pat) rapid_p1_peak(f, 'Out', o, 'Cell', S.cell, 'Figure', opts.show_figures, 'Pattern', pat); end
     if isempty(fn)
         error('run_session:stop', 'no Protocol 1 read-out on the path (rapid_p1_peak.m) and no peak_frame override');
     end
     p1_folder = ''; if isfield(S.out.p1, 'folder'), p1_folder = S.out.p1.folder; end
-    Q = fn(p1_folder, out_dir);
-    for g = fieldnames(Q).', if isfield(R, g{1}), R.(g{1}) = Q.(g{1}); end, end
-    % rapid_p1_peak returns frame12 and peak12_mV as [ON OFF]; the fallback uses the ON 12-px peak
-    if numel(R.frame12) > 1, R.frame12 = R.frame12(1); end
-    if numel(R.peak12_mV) > 1, R.peak12_mV = R.peak12_mV(1); end
-    R.source = 'rapid_p1_peak';
-end
-flags = '';
-fallback = false;
-if ~isempty(R.peak_mV) && R.peak_mV < opts.p1_peak_floor_mV
-    if ~isempty(R.frame12) && ~isempty(R.peak12_mV) && R.peak12_mV >= opts.p1_peak_floor_mV
-        R.frame = R.frame12; R.xy = []; fallback = true; flags = sprintf('6-px peak %.1f mV < floor %.1f; using the 12-px grid peak', R.peak_mV, opts.p1_peak_floor_mV);
-    else
-        S = decide(S, 'p1_peak', 'aim', 'ON peak >= floor on the 6-px grid, else the 12-px grid, else stop', R, 'no usable Protocol 1 response', true, 'stop');
-        error('run_session:stop', 'Protocol 1 peak %.1f mV is below the floor %.1f mV on both grids; nothing to aim at', R.peak_mV, opts.p1_peak_floor_mV);
+    Q = call_p1_readout(fn, p1_folder, out_dir, pat6);
+    R = take_p1_fields(R, Q); R.peak_6px_mV = R.peak_mV; R.source = 'rapid_p1_peak';
+    if ~isempty(R.peak_mV) && R.peak_mV < opts.p1_peak_floor_mV
+        if isempty(pat12)
+            S = decide(S, 'p1_peak', 'aim', 'ON peak >= floor on the 6-px grid, else the 12-px grid, else stop', R, 'no usable Protocol 1 response (no 12-px grid in the package)', true, 'stop');
+            error('run_session:stop', 'Protocol 1 peak %.1f mV is below the floor %.1f mV on the 6-px grid and the package has no 12-px grid; nothing to aim at', R.peak_mV, opts.p1_peak_floor_mV);
+        end
+        Q12 = call_p1_readout(fn, p1_folder, fullfile(out_dir, 'p1_12px'), pat12);
+        R.peak_12px_mV = Q12.peak_mV;
+        if isempty(Q12.peak_mV) || Q12.peak_mV < opts.p1_peak_floor_mV
+            S = decide(S, 'p1_peak', 'aim', 'ON peak >= floor on the 6-px grid, else the 12-px grid, else stop', R, 'no usable Protocol 1 response', true, 'stop');
+            error('run_session:stop', 'Protocol 1 peak is below the floor %.1f mV on both grids (6 px %.1f, 12 px %.1f mV); nothing to aim at', opts.p1_peak_floor_mV, R.peak_mV, Q12.peak_mV);
+        end
+        flags = sprintf('6-px peak %.1f mV < floor %.1f; using the 12-px grid peak (%.1f mV)', R.peak_mV, opts.p1_peak_floor_mV, Q12.peak_mV);
+        R = take_p1_fields(R, Q12); R.grid_px = 12; R.pattern = pat12; R.source = 'rapid_p1_peak (12-px grid)'; fallback = true;
     end
 end
 if isempty(R.frame) || ~isfinite(R.frame) || R.frame ~= round(R.frame) || R.frame < 2
     error('run_session:stop', 'no valid Protocol 1 peak frame (got %s)', mat2str(R.frame));
 end
-if isempty(R.xy) && ~isempty(pkg)
-    [R.xy, R.polarity] = frame_to_xy(pkg, R.frame);
+if ~isempty(R.pattern)
+    [R.aim_xy, R.aim_polarity] = frame_to_xy(R.pattern, R.frame);
+    if isempty(R.xy), R.xy = R.aim_xy; end
+    if isempty(R.polarity), R.polarity = R.aim_polarity; end
+elseif R.grid_px ~= 6
+    error('run_session:stop', 'the %d-px grid peak cannot be aimed without its pattern', R.grid_px);
 end
 S.out.p1_peak = R;
 S = decide(S, 'p1_peak', 'aim', 'ON peak >= floor on the 6-px grid, else the 12-px grid, else stop', R, ...
-    sprintf('frame %d at col/row %s (%s)', R.frame, mat2str(R.xy, 4), R.source), fallback, flags);
+    sprintf('frame %d of the %d-px grid at col/row %s (%s)', R.frame, R.grid_px, mat2str(R.xy, 4), R.source), fallback, flags);
 end
 
 function S = step_p2_full(S, opts)
@@ -501,7 +513,7 @@ if opts.dry_run
     S.out.p2 = dry_p2_placeholder(S, 'p2', 'full: generate_protocol2_package + run_protocol2 (all 88 bars)');
     return
 end
-[folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(S.out.p1_peak.frame, S.side, p2_metadata(S), opts.p2_package_root);
+[folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root);
 S.out.p2 = struct('folder', folder, 'mode', 'run_protocol2', 'peak_frame', S.out.p1_peak.frame, 'n_reps', opts.n_reps_p2);
 save_state(S, fullfile(S.exp_folder, 'session_state.json'));
 say(S, 'Protocol 2 generated in %s; running (%d reps, all 88 bars).', folder, opts.n_reps_p2);
@@ -521,8 +533,9 @@ elseif opts.dry_run && ~opts.p2_generate_in_dry_run
     S.out.p2a = dry_p2_placeholder(S, 'p2a', 'stage 1: generate_protocol2_package, then the sweep rows x n_reps');
     return
 else
-    folder = generate_protocol2_package(S.out.p1_peak.frame, S.side, p2_metadata(S), opts.p2_package_root); given = false;
-    say(S, 'Protocol 2 package generated for peak frame %d: %s', S.out.p1_peak.frame, folder);
+    folder = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root); given = false;
+    say(S, 'Protocol 2 package generated for peak frame %d (%d-px grid, aimed at col/row %s): %s', S.out.p1_peak.frame, getf(S.out.p1_peak, 'grid_px', 6), ...
+        mat2str(getf(S.out.p1_peak, 'aim_xy', [])), folder);
 end
 P = p2_plan(folder, opts);
 for w = P.warnings, say(S, 'FLAG %s', w{1}); end
@@ -1023,14 +1036,42 @@ c = c(cellfun(@(x) ischar(x) || (isstring(x) && isscalar(x)), c));
 names = regexprep(cellstr(c), '\.mat$', '');
 end
 
-function [xy, polarity] = frame_to_xy(pkg, frame)
-% Center (col, row) and polarity of a Protocol 1 frame, from the package's 6-px pattern (as
-% patt_frame_to_coord does from the rig's fixed path).
-d = dir(fullfile(pkg, 'Patterns', '0002_*.mat'));
-if isempty(d), d = dir(fullfile(pkg, 'Patterns', '*.mat')); end
-if isempty(d), xy = []; polarity = ''; return; end
-q = load(fullfile(d(1).folder, d(1).name)); Pats = q.pattern.Pats;
-if frame > size(Pats, 3), error('run_session:p1', 'Peak frame %d exceeds the %d frames of %s', frame, size(Pats, 3), d(1).name); end
+function [pat6, pat12] = p1_square_patterns(roots)
+% The 6-px and 12-px square patterns of a Protocol 1 package ('' when absent): the files named *6px*square*
+% and *12px*square* (0002_6px_... and 0001_12px_... in the rig's packages; a 6pxONLY package has only the
+% first), under Patterns/ of the first of ROOTS that has square patterns.
+pat6 = ''; pat12 = ''; pkg = '';
+for r = cellstr(roots)
+    if ~isempty(r{1}) && (~isempty(dir(fullfile(r{1}, 'Patterns', '*square*.mat'))) || ~isempty(dir(fullfile(r{1}, 'Patterns', '0002_*.mat'))))
+        pkg = r{1}; break
+    end
+end
+if isempty(pkg), return; end
+d = dir(fullfile(pkg, 'Patterns', '*square*.mat')); names = sort({d.name});
+i6 = find(contains(names, '6px') & ~contains(names, '12px'), 1); i12 = find(contains(names, '12px'), 1);
+if ~isempty(i6), pat6 = fullfile(pkg, 'Patterns', names{i6}); end
+if ~isempty(i12), pat12 = fullfile(pkg, 'Patterns', names{i12}); end
+if isempty(pat6)
+    d = dir(fullfile(pkg, 'Patterns', '0002_*.mat'));     % older packages without the grid in the name
+    if isscalar(d), pat6 = fullfile(d.folder, d.name); end
+end
+end
+
+function Q = call_p1_readout(fn, p1_folder, out_dir, pattern)
+if nargin(fn) == 2, Q = fn(p1_folder, out_dir); else, Q = fn(p1_folder, out_dir, pattern); end
+end
+
+function R = take_p1_fields(R, Q)
+for g = {'frame', 'xy', 'peak_mV', 'polarity'}
+    if isfield(Q, g{1}), R.(g{1}) = Q.(g{1}); end
+end
+end
+
+function [xy, polarity] = frame_to_xy(pattern_file, frame)
+% Center (col, row: the median pixel) and polarity of frame FRAME of a Protocol 1 square pattern, as
+% patt_frame_to_coord computes it from the rig's fixed 6-px pattern.
+q = load(pattern_file); Pats = q.pattern.Pats;
+if frame > size(Pats, 3), error('run_session:p1', 'Peak frame %d exceeds the %d frames of %s', frame, size(Pats, 3), pattern_file); end
 f = Pats(:, :, frame); bkg = mode(f(:));
 [r, c] = find(f ~= bkg);
 if isempty(r), xy = []; polarity = 'background'; return; end
@@ -1052,12 +1093,19 @@ o = struct('folder', folder, 'mode', 'dry_run', 'state', 'dry_run');
 say(S, 'Dry run: %s skipped (placeholder %s).', id, folder);
 end
 
-function [exp_folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(peak_frame, side, metadata, exp_path)
+function [exp_folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(peak, side, metadata, exp_path)
 % Mirrors generate_protocol2 (nested_RF_stimulus, 26 Oct 2026) without its dialog, the run and the
 % Google-sheet export. Keep in step with that file. Needs the rig (G4_Display_Tools, C:\matlabroot paths).
 % The package goes to <exp_path>\data\<yyyy_MM_dd_HH_mm> (create_exp_dir_G4), as generate_protocol2's does.
+% PEAK is S.out.p1_peak: aimed at its aim_xy / aim_polarity (the median pixel of the peak frame in the
+% pattern that was analysed, rounded as patt_frame_to_coord rounds); without them (no pattern found) at
+% its 6-px frame through patt_frame_to_coord, generate_protocol2's lookup in the rig's fixed 6-px pattern.
 px_intensity = [4, 0, 15]; px_crop_flash = 30; px_crop_bar = 30; n_flank = 5; n_reps = 3;
-[x, y, on_off] = patt_frame_to_coord(peak_frame, side);
+if isfield(peak, 'aim_xy') && numel(peak.aim_xy) == 2
+    x = int16(peak.aim_xy(1)); y = int16(peak.aim_xy(2)); on_off = lower(peak.aim_polarity);
+else
+    here = pwd; [x, y, on_off] = patt_frame_to_coord(peak.frame, side); cd(here);
+end
 if x < 17 + px_crop_flash/2 || x > 192 - px_crop_flash/2, warning('run_session:p2', 'x %d is near the screen edge', x); end
 if y < 1 + px_crop_flash/2 || y > 48 - px_crop_flash/2, warning('run_session:p2', 'y %d is near the screen edge', y); end
 exp_name = string(datetime('now', 'TimeZone', 'local', 'Format', 'yyyy_MM_dd_HH_mm'));
