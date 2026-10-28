@@ -78,6 +78,8 @@ function S = run_session(exp_folder, varargin)
 %                    current row and time left, the last FLAG; the time estimates are printed either way
 %     overview_plots true   after every recorded step, SESSION_STEP_OVERVIEW of its log (Vm, drift, frames,
 %                    current), shown when show_figures and saved as EXP_FOLDER/plots/<k>_<step>_overview.png
+%     analysis_plots true   after p3b and p4, ANALYZE_PROT3B / ANALYZE_P4 (src/analysis/session_plots): the
+%                    protocol's read-outs, one line in the session log, EXP_FOLDER/plots/<k>_<step>_analysis.png
 %   Each row also rewrites EXP_FOLDER/now_playing.json (package, row, pattern/function/AO IDs, duration,
 %   start time): what the arena is playing, for a display viewer.
 %
@@ -237,7 +239,7 @@ d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', ''
     'p1_peak_floor_mV', 2, 'pd_vector_length_floor', 0.1, 'center_max_dist_px', 6, 'center_max_offset_px', 4, ...
     'peak_floor_mV', 3, 'auto_accept', [], 'show_figures', [], 'ao_channel', 2, 'ai_channels', [], ...
     'adc_rates_hz', [0 10000 10000 0], 'host_config_file', '', 'pretrial_s', 2, 'ao_zero_tail_s', 0.1, 'dark_s', 30, ...
-    'controller_factory', [], 'sim_speed', 0, 'verbose_mock', false, 'show_status', [], 'overview_plots', true);
+    'controller_factory', [], 'sim_speed', 0, 'verbose_mock', false, 'show_status', [], 'overview_plots', true, 'analysis_plots', true);
 if numel(varargin) == 1 && isstruct(varargin{1})
     given = varargin{1};
 else
@@ -1628,6 +1630,27 @@ try
     if abs(O.summary.vm_drift_mV) > 5, say(S, 'FLAG %s: Vm drifted %+.1f mV over the step', id, O.summary.vm_drift_mV); end
 catch err
     say(S, 'FLAG overview %s failed: %s', id, err.message);
+end
+if ~opts.analysis_plots || ~ismember(id, {'p3b', 'p4'}), return; end
+fn = struct('p3b', 'analyze_prot3b', 'p4', 'analyze_p4');
+if exist(fn.(id), 'file') ~= 2, say(S, 'FLAG analysis %s skipped: %s not on the path', id, fn.(id)); return; end
+try
+    png = fullfile(S.exp_folder, 'plots', sprintf('%02d_%s_analysis.png', k, id));
+    A = feval(fn.(id), folder, 'Cell', S.cell, 'Png', png, 'Figure', opts.show_figures, 'Name', sprintf('Step %s analysis', id));
+    S.out.(id).analysis = A.summary; S.out.(id).analysis.png = png;
+    if strcmp(id, 'p3b')
+        say(S, 'Analysis p3b (%.1f s): R_gray %.2f GOhm; pairs kept %d/%d; dR ON trailing %.2f, OFF center %.2f, ON center %.2f GOhm', A.seconds, ...
+            A.summary.R_gray_GOhm, A.summary.pairs_kept, A.summary.pairs, A.summary.ON_trailing_dR_300_500, A.summary.OFF_center_dR_100_200, A.summary.ON_center_dR_150_250);
+        if A.summary.pairs_kept < A.summary.pairs / 2, say(S, 'FLAG p3b: only %d of %d pairs pass the baseline QC', A.summary.pairs_kept, A.summary.pairs); end
+    else
+        say(S, 'Analysis p4 (%.1f s): lattice ON peak %.1f mV; Gaussian sigma %.1f x %.1f px at s %+.1f v %+.1f; trailing hyperpolarization to s %+.1f px; passes kept %d/%d', ...
+            A.seconds, A.summary.lattice_ON_peak_mV, A.summary.gauss_sigma_s_px, A.summary.gauss_sigma_v_px, A.summary.gauss_s0_px, A.summary.gauss_v0_px, ...
+            A.summary.trailing_extent_px, A.summary.passes_kept, A.summary.passes);
+        if A.summary.passes_kept < A.summary.passes, say(S, 'FLAG p4: %d of %d passes within 5 mV of pass 1', A.summary.passes_kept, A.summary.passes); end
+    end
+    if ~opts.show_figures, close(A.figure); end
+catch err
+    say(S, 'FLAG analysis %s failed: %s', id, err.message);
 end
 end
 

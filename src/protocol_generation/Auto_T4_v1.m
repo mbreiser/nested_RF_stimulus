@@ -56,7 +56,7 @@ if ~isempty(o.branch)
     assert(strcmp(head, o.branch), 'Auto_T4_v1: %s is on %s, not %s', repo, head, o.branch);
 end
 for f = {'run_session', 'run_protocol2', 'create_protocol2', 'generate_bar_pos_fns', 'generate_bar_flash_pos_fns', ...
-        'rapid_p1_peak', 'rapid_readout', 'arena_viewer'}
+        'rapid_p1_peak', 'rapid_readout', 'arena_viewer', 'analyze_prot3b', 'analyze_p4'}
     assert(startsWith(which(f{1}), src), 'Auto_T4_v1: %s comes from %s, not this repository', f{1}, which(f{1}));
 end
 pc = which('PanelsController');
