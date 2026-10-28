@@ -163,8 +163,8 @@ function R = rapid_readout(session_folder, varargin)
         fprintf('read-out call 2: bar flashes present (%d of 88 bars) -> center from the two placement-frame sets, window, sites, Prot3b and Protocol 4 tables%s\n', n_bars, src2);
     end
     if pp.pd_flag_gt5, flag = sprintf('  [pd_flag_gt5: the speeds disagree by more than %g deg]', opts.FlagDeg); else, flag = ''; end
-    fprintf('placement PD %.1f deg: 28 deg/s vector %.1f deg (L = %.2f), 56 deg/s vector %.1f deg (L = %.2f), differ by %.1f deg -> rule %s%s\n', ...
-        pp.pd_placement, pp.pd_vector_28, pp.vector_length_28, pp.pd_vector_56, pp.vector_length_56, pp.diff_28_56_deg, pp.pd_rule, flag);
+    fprintf('placement PD %.1f deg: 28 deg/s vector %.1f deg (L = %.2f, DSI %.2f), 56 deg/s vector %.1f deg (L = %.2f, DSI %.2f), differ by %.1f deg -> rule %s%s\n', ...
+        pp.pd_placement, pp.pd_vector_28, pp.vector_length_28, pp.dsi_28, pp.pd_vector_56, pp.vector_length_56, pp.dsi_56, pp.diff_28_56_deg, pp.pd_rule, flag);
     if ~pp.agree
         fprintf('   WARNING: the 28 and 56 deg/s vector PDs differ by %.1f deg (> %g deg); placement uses the 28 deg/s vector alone (28 deg/s %.1f deg, L %.2f; 56 deg/s %.1f deg, L %.2f)\n', ...
             pp.diff_28_56_deg, opts.AgreeDeg, pp.pd_vector_28, pp.vector_length_28, pp.pd_vector_56, pp.vector_length_56);
@@ -181,6 +181,7 @@ function R = rapid_readout(session_folder, varargin)
         fprintf('   parallel set frames (along the orthogonal axis): %s\n', mat2str(bs.par_frames_1based));
         fprintf('sequencer inputs: usable_pd %d (%s)\n', pp.usable_pd, pp.usable_pd_rule);
         out = struct('cell', tag, 'session', sid, 'source', session_folder, 'stage', 1, 'seed', opts.Seed, 'pd_deg', A.pd, 'pd_vector_28', pp.pd_vector_28, 'pd_vector_56', pp.pd_vector_56, ...
+            'vector_length_28', pp.vector_length_28, 'vector_length_56', pp.vector_length_56, 'dsi_28', pp.dsi_28, 'dsi_56', pp.dsi_56, ...
             'pd_placement', pp.pd_placement, 'pd_rule', pp.pd_rule, 'pd_flag_gt5', pp.pd_flag_gt5, 'placement', pp, 'bar_sets', rmfield(bs, {'center_xy', 'e_pd', 'e_or'}), ...
             'sequencer_inputs', struct('usable_pd', pp.usable_pd, 'usable_pd_rule', pp.usable_pd_rule, 'pd_inputs', pp.pd_inputs, 'profiles_unimodal', 'n/a'), ...
             'stage2', struct('n_bars', numel(bars), 'reps', 3, 'total_s', round(total2, 1)), 'layout', S.layout, 'implementation', 'MATLAB rapid_readout.m');
@@ -191,7 +192,7 @@ function R = rapid_readout(session_folder, varargin)
         if opts.Figure
             P = struct('cell', tag, 'dirs', A.dirs, 'amp28', A.amp28, 'amp56', A.amp56, 'pd_vector_28', pp.pd_vector_28, 'pd_vector_56', pp.pd_vector_56, ...
                        'pd_placement', pp.pd_placement, 'pd_snapped', A.pd, 'vector_length_28', pp.vector_length_28, 'vector_length_56', pp.vector_length_56, ...
-                       'pd_rule', pp.pd_rule, 'pd_flag_gt5', pp.pd_flag_gt5, 'usable_pd', pp.usable_pd);
+                       'pd_rule', pp.pd_rule, 'pd_flag_gt5', pp.pd_flag_gt5, 'usable_pd', pp.usable_pd, 'dsi_28', pp.dsi_28, 'dsi_56', pp.dsi_56);
             P.traces28 = sweep_traces28(E, A.dirs);
             fig = plot_rapid_stage1(P);
             if opts.SavePng, exportgraphics(fig, fullfile(opts.Out, [tag '_stage1.png']), 'Resolution', 100); end
@@ -634,6 +635,19 @@ function pp = placement_pd(A, agree_deg, flag_deg)
     pp.usable_pd_rule = 'all 16 directions measured and normalized 28 deg/s vector length >= 0.1';
     pp.pd_inputs = struct('vector_length_28', round(l28, 3), 'vector_length_56', round(l56, 3), 'n_directions_28', n_ok, ...
                           'amp28_max_mV', round(max(A.amp28), 2), 'amp28_at_pd_mV', round(A.amp28(ipd), 2), 'amp28_at_nd_mV', round(A.amp28(ind), 2));
+    % DSI per speed, QC only (no decision uses it): (R_pref - R_null) / (R_pref + R_null), pref = the direction with the largest
+    % amplitude at that speed, null = the direction 180 deg from it; a negative null amplitude counts as 0 (DSI in 0..1)
+    [pp.dsi_28, pp.dsi_pref_28] = dsi(A.dirs, A.amp28); [pp.dsi_56, pp.dsi_pref_56] = dsi(A.dirs, A.amp56);
+    pp.dsi_rule = '(R_pref - R_null) / (R_pref + R_null); pref = largest amplitude, null = 180 deg away, null < 0 counts as 0; QC only';
+end
+
+function [d, pref] = dsi(dirs, amp)
+    d = NaN; pref = NaN;
+    if ~any(isfinite(amp)), return; end
+    [rp, i] = max(amp); pref = dirs(i);
+    [dn, j] = min(abs(wrap180(dirs - (pref + 180))));
+    if dn > 1 || ~isfinite(amp(j)) || rp <= 0, return; end
+    rn = max(amp(j), 0); d = round((rp - rn) / (rp + rn), 3);
 end
 
 function n = halfmax_peaks(prof)

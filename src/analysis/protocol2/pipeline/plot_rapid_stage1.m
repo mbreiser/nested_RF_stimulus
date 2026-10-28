@@ -7,7 +7,7 @@ function fig = plot_rapid_stage1(P)
 %     right  the repeat-mean Vm of the 28 deg/s sweep in every direction (baseline subtracted, motion shaded),
 %            on one y scale, the panel nearest the placement PD outlined
 %   P fields: cell, dirs (deg), amp28, amp56 (mV), pd_vector_28, pd_vector_56, pd_placement, pd_snapped,
-%   vector_length_28, vector_length_56, pd_rule, pd_flag_gt5, usable_pd, traces28 (cell per direction:
+%   vector_length_28, vector_length_56, pd_rule, pd_flag_gt5, usable_pd, dsi_28, dsi_56 (optional), traces28 (cell per direction:
 %   struct t_s, vm_mV, motion_s), name (window name).
 %   27 October 2026.
 
@@ -19,8 +19,10 @@ tl = tiledlayout(fig, 4, 8, 'TileSpacing', 'tight', 'Padding', 'compact');
 flag = ''; if P.pd_flag_gt5, flag = '  [28/56 differ > 5 deg]'; end
 title(tl, sprintf('%s  Protocol 2 stage 1: placement PD %.1f deg (rule %s), snapped %g deg%s', P.cell, P.pd_placement, P.pd_rule, P.pd_snapped, flag), ...
     'Interpreter', 'none', 'FontWeight', 'bold');
-subtitle(tl, sprintf('28 deg/s vector %.1f deg (L %.2f)   56 deg/s vector %.1f deg (L %.2f)   usable PD: %s', ...
-    P.pd_vector_28, P.vector_length_28, P.pd_vector_56, P.vector_length_56, tern(P.usable_pd, 'yes', 'NO (stage 2 plays all 88 bars)')), 'FontSize', 9);
+if ~isfield(P, 'dsi_28'), P.dsi_28 = NaN; end
+if ~isfield(P, 'dsi_56'), P.dsi_56 = NaN; end
+subtitle(tl, sprintf('28 deg/s vector %.1f deg (L %.2f, DSI %.2f)   56 deg/s vector %.1f deg (L %.2f, DSI %.2f)   usable PD: %s', ...
+    P.pd_vector_28, P.vector_length_28, P.dsi_28, P.pd_vector_56, P.vector_length_56, P.dsi_56, tern(P.usable_pd, 'yes', 'NO (stage 2 plays all 88 bars)')), 'FontSize', 9);
 
 % ---- polar tuning
 pax = polaraxes(tl); pax.Layout.Tile = 1; pax.Layout.TileSpan = [4 4]; hold(pax, 'on');
