@@ -1150,6 +1150,9 @@ copyfile(fullfile(src.folder, src.name), fullfile(dirs.pat, ['0001_' src.name(6:
 pat_bin = fullfile(p2a, 'Patterns', sprintf('pat%04d.pat', pat_id));
 if isfile(pat_bin), copyfile(pat_bin, fullfile(dirs.pat, 'pat0001.pat')); end
 q = load(fullfile(src.folder, src.name)); n_frames = size(q.pattern.Pats, 3);
+% The read-out numbers the 88 bars 1..88 (S.cx / the frame log's 0-based value); bar k is pattern frame k + 1
+% (frame 1 = background), so the table's bar numbers are shifted by one here.
+Q.bar_pattern_frame_1based = Q.bar_pattern_frame_1based + 1;
 frames_all = Q.bar_pattern_frame_1based.';
 if any(frames_all < 2 | frames_all > n_frames), error('run_session:p2', 'stage-2 frames outside 2..%d of the bar pattern', n_frames); end
 reps_in_table = unique(Q.repeat).';

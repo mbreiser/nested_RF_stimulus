@@ -117,8 +117,8 @@ check(isscalar(dp) && contains(dp.name, 'bar_flashes_slow') && contains(dp.name,
 m = load(fullfile(exp2, 'p2b', 'Functions', dir(fullfile(exp2, 'p2b', 'Functions', '0002_*')).name)); f = m.pfnparam.func;
 Sq = readtable(fullfile(readout_dir, 'JY1008_stage2_sequence.csv'), 'TextType', 'string', 'Delimiter', ',');
 first = Sq(Sq.repeat == 1 & Sq.cls == "flash80" & Sq.order == 1, :);
-check(numel(f) == 25*500 && all(f(1:1500) == 1) && f(1501) == first.bar_pattern_frame_1based && f(1540) == first.bar_pattern_frame_1based && f(1541) == 1, ...
-    'stage 2 PFN rep 1 / 80 ms: 3 s gray, then 80 ms of the first table frame + 920 ms gray (25 s)');
+check(numel(f) == 25*500 && all(f(1:1500) == 1) && f(1501) == first.bar_pattern_frame_1based + 1 && f(1540) == first.bar_pattern_frame_1based + 1 && f(1541) == 1, ...
+    'stage 2 PFN rep 1 / 80 ms: 3 s gray, then 80 ms of the first table bar (pattern frame bar + 1) + 920 ms gray (25 s)');
 E2 = readtable(fullfile(exp2, 'p2b', 'Reports', 'event_ledger.csv'), 'Delimiter', ',');
 check(height(E2) == 220 && sum(E2.flash_ms == 80) == 110 && sum(E2.flash_ms == 14) == 110, 'stage 2 event ledger: 220 flashes, half 80 ms, half 14 ms');
 check(isequal(sort(unique(E2.pattern_frame(E2.repeat == 4))), sort(unique(E2.pattern_frame(E2.repeat == 1)))), 'extra repeats reuse the same 22 frames');
