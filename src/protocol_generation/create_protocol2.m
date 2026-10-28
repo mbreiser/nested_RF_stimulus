@@ -17,13 +17,18 @@ function [pattern_order, func_order, trial_dur] = create_protocol2(exp_folder, m
 %                    .Age    (char)    - fly age in days
 %                    .Strain (char)    - fly genotype string
 %
+%   Kept in step with the rig's nested_RF_stimulus (branch setup-pharma,
+%   commits e99cc82, 5f269a7, 59a57d5), which makes Jin Yong's Protocol 2
+%   packages: five sweep speeds, a first "mock" sweep, no square-flash
+%   condition (28 Oct 2026).
+%
 %   OUTPUTS:
 %     pattern_order - 1xN double
 %                     Pattern presentation order indices. Structure:
-%                       [grey, 4px_flash, 6px_flash, grey,
+%                       [grey, mock sweep (bar_patt(1), 28 dps FLIP; excluded
+%                        from the analysis),
 %                        bar_patt x2 (fwd+flip) x n_bar_patt at 28 dps, grey,
-%                        bar_patt x2 (fwd+flip) x n_bar_patt at 56 dps, grey,
-%                        bar_patt x2 (fwd+flip) x n_bar_patt at 168 dps, grey,
+%                        ... at 56, 168, 250 and 500 dps, each followed by grey,
 %                        bar_flash_slow, grey, bar_flash_fast]
 %     func_order    - 1xN double
 %                     Position function indices matched to pattern_order.
@@ -31,17 +36,20 @@ function [pattern_order, func_order, trial_dur] = create_protocol2(exp_folder, m
 %                     Duration of each trial in seconds.
 %
 %   PATTERN ASSIGNMENT:
-%     Patterns 1-2  : flash patterns (4px, 6px)
-%     Patterns 3..N-1 : bar sweep patterns (8 orientations)
-%     Pattern N     : bar flash pattern
+%     Pattern 1       : 4px flash pattern (shown on its frame 1 as the grey;
+%                       the flashes are not played)
+%     Patterns 2..N-1 : bar sweep patterns (8 orientations)
+%     Pattern N       : bar flash pattern (FLASHES)
 %
 %   FUNCTION ASSIGNMENT:
-%     Functions 1-2   : flash position functions
-%     Functions 3-4   : 28 dps bar fwd/flip
-%     Functions 5-6   : 56 dps bar fwd/flip
-%     Functions 7-8   : 168 dps bar fwd/flip
-%     Functions 9-11  : bar flash slow (3 reps)
-%     Function 12     : bar flash fast
+%     Function 1      : 4px flash position function (not played)
+%     Functions 2-3   : 28 dps bar fwd/flip
+%     Functions 4-5   : 56 dps bar fwd/flip
+%     Functions 6-7   : 168 dps bar fwd/flip
+%     Functions 8-9   : 250 dps bar fwd/flip
+%     Functions 10-11 : 500 dps bar fwd/flip
+%     Functions 12-14 : bar flash slow (80 ms, Rep1-3)
+%     Functions 15-17 : bar flash fast (14 ms, Rep1-3)
 %     Function N-1    : 10s static (initial grey baseline)
 %     Function N      : 3s static (inter-block gap)
 %
@@ -65,13 +73,13 @@ patinfo = dir(fullfile(pattern_folder, '*.pat'));
 % num_files is the number of patterns.
 num_files = length({patinfo.name});
 
-flash_patt = [1, 2];
+flash_patt = 1;
 bar_patt = flash_patt(end)+1:num_files-1;
 bar_flash_patt = num_files; % Last pattern is the bar flashes.
 n_bar_patt = numel(bar_patt);
 n_dir = 2; % 2 reps = forward and reverse direction
-n_speeds = 3; % 3 reps = n_speeds
-pattern_order = [1, flash_patt, 1, repmat([repelem(bar_patt, n_dir), 1], [1, n_speeds]), bar_flash_patt, 1, bar_flash_patt]; 
+n_speeds = 5; % 5 reps = n_speeds
+pattern_order = [1, bar_patt(1), repmat([repelem(bar_patt, n_dir), 1], [1, n_speeds]), bar_flash_patt, 1, bar_flash_patt];
 
 % two "flash_patt" at the beginning - one for grey presentation.
 n_patts = numel(pattern_order);
@@ -100,16 +108,30 @@ num_files = length({pfninfo.name});
 total_dur = 0;
 trial_dur = nan([1, n_patts]);
 
-fns_flash = [1,2];
-fns_28dps = [3,4];
-fns_56dps = [5,6];
-fns_168dps = [7, 8];
-fn_bar_flash_slow = 9; % Will update this to 10 and 11 for the different reps in "run_protocol2" [9, 10, 11];
-fn_bar_flash_fast = 12;
+fns_28dps = [2,3];
+fns_56dps = [4,5];
+% fns_112dps = [6,7];
+fns_168dps = [6,7];
+fns_250dps = [8,9];
+fns_500dps = [10,11];
+
+fn_bar_flash_slow = 12; % run_protocol2 plays the -Rep2 / -Rep3 functions of the same name on repeats 2 and 3
+fn_bar_flash_fast = 15;
 fn_static_10 = num_files-1;
 fn_static_3 = num_files;
 
-func_order = [fn_static_10, fns_flash, fn_static_3, repmat(fns_28dps, [1,n_bar_patt]), fn_static_3, repmat(fns_56dps, [1,n_bar_patt]), fn_static_3, repmat(fns_168dps, [1,n_bar_patt]), fn_static_3, fn_bar_flash_slow, fn_static_3, fn_bar_flash_fast];
+% Add a first bar sweep in 180 direction - exclude this from the analysis.
+func_order = [fn_static_10,...
+    fns_28dps(2), ...
+    repmat(fns_28dps, [1,n_bar_patt]), fn_static_3,...
+    repmat(fns_56dps, [1,n_bar_patt]), fn_static_3,...
+    repmat(fns_168dps, [1,n_bar_patt]), fn_static_3,...
+    repmat(fns_250dps, [1,n_bar_patt]), fn_static_3,...
+    repmat(fns_500dps, [1,n_bar_patt]), fn_static_3,...
+    fn_bar_flash_slow, fn_static_3,...
+    fn_bar_flash_fast];
+
+    % repmat(fns_112dps, [1,n_bar_patt]), fn_static_3,...
 
 for p = 1:n_patts
     f = func_order(p);

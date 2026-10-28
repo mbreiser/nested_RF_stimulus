@@ -45,7 +45,7 @@ function S = run_session(exp_folder, varargin)
 %
 %   OPTIONS (name/value or one struct):
 %     dry_run        false   SessionMockController instead of PanelsController; no G4 Host, no arena, no
-%                            Protocol 2 generation (needs the rig paths); files, ledgers and decisions are
+%                            Protocol 2 generation unless p2_generate_in_dry_run; files, ledgers and decisions are
 %                            written and the controller calls are logged
 %     cell, side, age, strain   metadata (cell tag such as 'JY1027'; side 'L'|'R')
 %     p2_mode        'two_stage' | 'full'
@@ -56,6 +56,10 @@ function S = run_session(exp_folder, varargin)
 %                    default rapid_p1_peak when on the path
 %     peak_frame     Protocol 1 ON peak frame (6-px grid) given by hand: an OVERRIDE, logged
 %     p2_folder      an existing Protocol 2 package (stage 1 or full), p2b_folder an existing stage-2 package
+%     p2_package_root  'C:\matlabroot\G4_Protocols\nested_RF_protocol2'  where a generated Protocol 2 package
+%                    goes (<root>\data\<yyyy_MM_dd_HH_mm>, as generate_protocol2's)
+%     p2_generate_in_dry_run  false   true: a dry run generates the stage-1 package too (needs
+%                    G4_Display_Tools on the path; point p2_package_root at a scratch folder)
 %     readout_fn     @(call, S, out_dir) producing the read-out files (call 1: <cell>_stage1.json,
 %                    <cell>_stage2_sequence.csv; call 2: <cell>_prot3b_frames.csv, _prot3b_blocks.csv,
 %                    _prot4_frames.csv, _prot4_sequence.csv, _sites.csv, _locations.json, _locations.png);
@@ -228,6 +232,7 @@ d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', ''
     'p2_mode', 'two_stage', 'steps', {{}}, 'p1_mode', 'sequencer', 'p1_package', '', 'p1_folder', '', ...
     'p1_readout_fn', [], 'peak_frame', [], 'p2_folder', '', 'p2b_folder', '', 'readout_fn', [], 'readout_dir', '', ...
     'analysis_repo', '', 'center', [], 'n_reps_stage2', 3, 'n_reps_p2', 3, 'p2_bar_flash_pattern_id', [], ...
+    'p2_package_root', 'C:\matlabroot\G4_Protocols\nested_RF_protocol2', 'p2_generate_in_dry_run', false, ...
     'p1_peak_floor_mV', 2, 'pd_vector_length_floor', 0.1, 'center_max_dist_px', 6, 'center_max_offset_px', 4, ...
     'peak_floor_mV', 3, 'auto_accept', [], 'show_figures', [], 'ao_channel', 2, 'ai_channels', [], ...
     'adc_rates_hz', [0 10000 10000 0], 'host_config_file', '', 'pretrial_s', 2, 'ao_zero_tail_s', 0.1, 'dark_s', 30, ...
@@ -496,7 +501,7 @@ if opts.dry_run
     S.out.p2 = dry_p2_placeholder(S, 'p2', 'full: generate_protocol2_package + run_protocol2 (all 88 bars)');
     return
 end
-[folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(S.out.p1_peak.frame, S.side, p2_metadata(S));
+[folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(S.out.p1_peak.frame, S.side, p2_metadata(S), opts.p2_package_root);
 S.out.p2 = struct('folder', folder, 'mode', 'run_protocol2', 'peak_frame', S.out.p1_peak.frame, 'n_reps', opts.n_reps_p2);
 save_state(S, fullfile(S.exp_folder, 'session_state.json'));
 say(S, 'Protocol 2 generated in %s; running (%d reps, all 88 bars).', folder, opts.n_reps_p2);
@@ -512,11 +517,12 @@ if isfield(S.out.p2a, 'folder') && ~isempty(S.out.p2a.folder) && isfolder(S.out.
 end
 if isfield(S.out.p2a, 'folder') && ~isempty(S.out.p2a.folder) && isfolder(fullfile(S.out.p2a.folder, 'Patterns'))
     folder = S.out.p2a.folder; given = true;
-elseif opts.dry_run
+elseif opts.dry_run && ~opts.p2_generate_in_dry_run
     S.out.p2a = dry_p2_placeholder(S, 'p2a', 'stage 1: generate_protocol2_package, then the sweep rows x n_reps');
     return
 else
-    folder = generate_protocol2_package(S.out.p1_peak.frame, S.side, p2_metadata(S)); given = false;
+    folder = generate_protocol2_package(S.out.p1_peak.frame, S.side, p2_metadata(S), opts.p2_package_root); given = false;
+    say(S, 'Protocol 2 package generated for peak frame %d: %s', S.out.p1_peak.frame, folder);
 end
 P = p2_plan(folder, opts);
 for w = P.warnings, say(S, 'FLAG %s', w{1}); end
@@ -1044,14 +1050,14 @@ o = struct('folder', folder, 'mode', 'dry_run', 'state', 'dry_run');
 say(S, 'Dry run: %s skipped (placeholder %s).', id, folder);
 end
 
-function [exp_folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(peak_frame, side, metadata)
+function [exp_folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(peak_frame, side, metadata, exp_path)
 % Mirrors generate_protocol2 (nested_RF_stimulus, 26 Oct 2026) without its dialog, the run and the
 % Google-sheet export. Keep in step with that file. Needs the rig (G4_Display_Tools, C:\matlabroot paths).
+% The package goes to <exp_path>\data\<yyyy_MM_dd_HH_mm> (create_exp_dir_G4), as generate_protocol2's does.
 px_intensity = [4, 0, 15]; px_crop_flash = 30; px_crop_bar = 30; n_flank = 5; n_reps = 3;
 [x, y, on_off] = patt_frame_to_coord(peak_frame, side);
 if x < 17 + px_crop_flash/2 || x > 192 - px_crop_flash/2, warning('run_session:p2', 'x %d is near the screen edge', x); end
 if y < 1 + px_crop_flash/2 || y > 48 - px_crop_flash/2, warning('run_session:p2', 'y %d is near the screen edge', y); end
-exp_path = 'C:\matlabroot\G4_Protocols\nested_RF_protocol2';
 exp_name = string(datetime('now', 'TimeZone', 'local', 'Format', 'yyyy_MM_dd_HH_mm'));
 exp_folder = create_exp_dir_G4(exp_name, exp_path);
 generate_flash_stimulus_xy(x, y, px_intensity, px_crop_flash, 4, on_off, 0.16, 0.44, exp_folder);
