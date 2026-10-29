@@ -96,6 +96,13 @@ check(norm(rsA.center_col_row(:).' - ref.center) < 0.1, sprintf('A: read-out cal
 dA = SA.decisions(strcmp({SA.decisions.decision}, 'center'));
 check(~dA.fallback && isequal(SA.center_shift_px, [0 0]) && SA.out.build.p3b.n_blocks == 26, ...
     sprintf('A: center accepted; Prot3b %d blocks, Protocol 4 %d frames, %.1f min', SA.out.build.p3b.n_blocks, SA.out.build.p4.n_frames, SA.out.build.p4.programmed_s / 60));
+LA = jsondecode(fileread(fullfile(expA, 'readout', [tag '_locations.json'])));
+F4 = readtable(fullfile(expA, 'readout', [tag '_prot4_frames.csv']), 'TextType', 'string', 'Delimiter', ',');
+lat = F4(F4.item == "lattice", :); W = LA.window_px;
+check(W.s_lead == -14 && W.s_trail == 18 && W.v_half == 8 && all(lat.s_px > -15 & lat.s_px < 19 & abs(lat.v_px) < 9) && ...
+    (min(lat.s_px) < -13 || LA.lattice.n_dropped_off_screen > 0) && (max(lat.s_px) > 17 || LA.lattice.n_dropped_off_screen > 0), ...
+    sprintf('A: Protocol 4 lattice window s %d..%+d, v +-%d px: %d squares at s %.1f..%+.1f (%d off screen)', W.s_lead, W.s_trail, W.v_half, ...
+    height(lat), min(lat.s_px), max(lat.s_px), LA.lattice.n_dropped_off_screen));
 check(isfield(SA.out, 'arena_off') && SA.out.arena_off.ok && ~isempty(SA.finished), 'A: session finished, allOff at the end');
 fprintf('A took %.0f s\n', tA);
 

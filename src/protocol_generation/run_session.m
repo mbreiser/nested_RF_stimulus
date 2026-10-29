@@ -31,7 +31,8 @@ function S = run_session(exp_folder, varargin)
 %              to the Protocol 1 peak and the tables are shifted there, flagged
 %     build    Prot3b and Protocol 4 packages from the tables
 %     p3b      Prot3b: 26 blocks, five AO levels on AO2 (7.5 min)
-%     p4       Protocol 4: one randomized sequence with mixed flash periods (about 14 min)
+%     p4       Protocol 4: one randomized sequence with mixed flash periods (about 15 min; lattice
+%              window s -14..+18 px since 29 Oct 2026)
 %   With 'p2_mode','full' Protocol 2 runs as today (all 88 bars in one run, run_protocol2) and the
 %   read-out is called once at its end; the steps are then dark30, p1, p1_peak, p2, readout, build, p3b, p4.
 %
@@ -289,7 +290,7 @@ L = struct('dark30', {{'30 s dark at 0 pA (break-in)', 0.5}}, 'p1', {{'Protocol 
     'p2a', {{'Protocol 2 stage 1 (sweeps)', 7.3}}, 'readout1', {{'Read-out 1 (placement PD, bar sets)', 0.3}}, ...
     'p2b', {{'Protocol 2 stage 2 (22 bars)', 1.7}}, 'readout', {{'Read-out 2 (center, sites, tables)', 0.5}}, ...
     'build', {{'Build Prot3b + Protocol 4', 0.5}}, 'p3b', {{'Prot3b (26 blocks, 5 AO levels)', 7.5}}, ...
-    'p4', {{'Protocol 4 (combined map)', 14}});
+    'p4', {{'Protocol 4 (combined map)', 15}});
 labels = cellfun(@(id) L.(id){1}, ids, 'UniformOutput', false);
 est = cellfun(@(id) L.(id){2}, ids);
 end

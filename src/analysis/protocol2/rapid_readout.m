@@ -31,7 +31,9 @@ function R = rapid_readout(session_folder, varargin)
 %   <cell>_stage2_bars.csv (the 22 bars of the two placement-frame sets as
 %   frames of the 88-frame bar pattern) and <cell>_stage2_sequence.csv.
 %   Specifications: docs/briefs/JY_PROTOCOL_HANDOVER_20261026.md (that
-%   repository). The PD-frame offset s is positive toward the PD (the
+%   repository). One deliberate difference from the Python script since
+%   29 Oct 2026: the Protocol 4 lattice window is s -14..+18 px (LATTICE_WINDOW),
+%   not -12..+16, so the lattice, prot4 frame and sequence tables differ. The PD-frame offset s is positive toward the PD (the
 %   trailing / proximal side); v is the orthogonal offset; arena positions are
 %   1-based (column, row) with row 1 at the top; frame 1 of both patterns is
 %   the background.
@@ -281,7 +283,7 @@ function R = rapid_readout(session_folder, varargin)
         'bar_sets', rmfield(bs, {'center_xy', 'e_pd', 'e_or', 'perp_peak', 'par_peak', 'perp_under', 'par_under'}), 'm6_pd_1based_tutl', A.m6_pd, 'm6_or_1based_tutl', A.m6_or, ...
         'static_vm_mV', round(double(A.static_vm), 2), 'rf_center_col_row_1based', [round(cc, 2), round(cr, 2)], ...
         'centroid_offset_px', struct('s', round(A.centroid_pd, 2), 'v', round(A.centroid_or, 2)), ...
-        'window_px', struct('s_lead', -12, 's_trail', 16, 'v_half', 8), 'core_px', struct('s_half', 6, 'v_half', 4), 'lattice', grid, 'deg_per_px', 1.25, ...
+        'window_px', lattice_window(), 'core_px', struct('s_half', 6, 'v_half', 4), 'lattice', grid, 'deg_per_px', 1.25, ...
         'sites', sites, 'site_warnings', {notes}, ...
         'prot3b', struct('n_blocks', numel(p3_blocks), 'total_s', round(p3_total, 1), 'timing', struct('flash_ms', 160, 'gray_ms', 440, 'settle_s', 3.0, 'hold_flash_ms', 500, 'hold_period_ms', 1000, 'hold_reps', 6), ...
                          'order_blocks_1_20_pA', p3b_order(), 'order_blocks_21_26_pA', [-1 0 1 1 0 -1], 'ao_volts_per_pA', 0.25, 'n_frames', numel(p3_frames)), ...
@@ -307,7 +309,7 @@ function R = rapid_readout(session_folder, varargin)
     if opts.Figure
         P = struct('cell', tag, 'pd', pp.pd_placement, 'pd_vector', pp.pd_vector_28, 'pd_vector_56', pp.pd_vector_56, 'pd_snapped', A.pd, 'center', G.center, 'center_xy', G.C, 'e_pd', G.e_pd, 'e_or', G.e_or, ...
                    'bar_cx', S.cx + 1, 'bar_cy', S.cy + 1, 'g_pd', bs.g_perp, 'g_or', bs.g_par, 'lattice', kept, 'sites', sites, 'p4_frames', p4_frames, ...
-                   'window', struct('s_lead', -12, 's_trail', 16, 'v_half', 8));
+                   'window', lattice_window());
         if ~isempty(p1), P.others = struct('name', 'protocol1_ON_peak', 'col', p1(1), 'row', p1(2)); end
         P.profiles.pd = struct('pos', bs.perp_pos_px, 'peak', bs.perp_peak, 'under', bs.perp_under, 'm6', bs.perp_m6_1based, 'set', bs.g_perp);
         P.profiles.or = struct('pos', bs.par_pos_px, 'peak', bs.par_peak, 'under', bs.par_under, 'm6', bs.par_m6_1based, 'set', bs.g_par);
@@ -750,8 +752,15 @@ function r = pyround(x)
     r = round(x); h = (x - floor(x)) == 0.5; r(h) = 2 * round(x(h) / 2);
 end
 
+function W = lattice_window()
+% The Protocol 4 4-px lattice window in the PD frame (px). The hand-over's s -12..+16 widened by one 2-px
+% step at each end on 29 Oct 2026 (JY1028a: the trailing hyperpolarization reached s +14.5 and the leading
+% one the s -12 edge); tools/rapid_prot2_locations.py still uses -12..+16, so its lattice tables differ.
+W = struct('s_lead', -14, 's_trail', 18, 'v_half', 8);
+end
+
 function [kept, grid] = lattice(G)
-    sz = 4; step = 2; half = 1.5; W = struct('s_lead', -12, 's_trail', 16, 'v_half', 8);
+    sz = 4; step = 2; half = 1.5; W = lattice_window();
     c = to_arena(G, 0, 0); col0 = pyround(c(1) - half); row0 = pyround(c(2) - half);
     reach = ceil(max([abs(W.s_lead), W.s_trail, W.v_half]) * sqrt(2) / step) + 2;
     kept = struct([]); n_off = 0;

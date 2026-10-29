@@ -52,7 +52,10 @@ check(ck.near_p1 && abs(ck.dist_to_p1_px - norm([79.1 25.0] - [81.5 23.5])) < 0.
     sprintf('center checks: %.2f px from the Protocol 1 peak, placement offset inside the bar set, center peak %.1f mV, unimodal n/a', ck.dist_to_p1_px, rs.center_peak_mV));
 dA = SA.decisions(strcmp({SA.decisions.decision}, 'center'));
 check(~dA.fallback && isequal(SA.center_shift_px, [0 0]), 'center accepted, no shift');
-check(SA.out.build.p3b.n_frames == 26 && SA.out.build.p3b.n_blocks == 26 && SA.out.build.p4.n_frames == 399 && abs(SA.out.build.p4.programmed_s/60 - 13.3) < 0.15, ...
+F4 = readtable(fullfile(expA, 'readout', [tag '_prot4_frames.csv']), 'TextType', 'string', 'Delimiter', ',');
+% 399 frames and 13.3 min with the hand-over's lattice window (s -12..+16); the window is s -14..+18 since 29 Oct 2026
+check(SA.out.build.p3b.n_frames == 26 && SA.out.build.p3b.n_blocks == 26 && SA.out.build.p4.n_frames == height(F4) && SA.out.build.p4.n_frames > 399 && ...
+    SA.out.build.p4.programmed_s/60 > 13.3 && SA.out.build.p4.programmed_s/60 < 15.5, ...
     sprintf('packages from the real tables: Prot3b 26 frames / 26 blocks; Protocol 4 %d frames, %.1f min', SA.out.build.p4.n_frames, SA.out.build.p4.programmed_s/60));
 
 %% B. Two-stage: stage 1 rows from the package, call 1 (Stage1Test), stage-2 package from the real sequence, call 2 (Stage2Test)

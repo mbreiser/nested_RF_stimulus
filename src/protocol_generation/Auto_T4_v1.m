@@ -22,7 +22,7 @@ function S = Auto_T4_v1(tag, side, varargin)
 %     4. run_session with the default two-stage sequence: dark30 (then the one prompt: type the holding
 %        current), p1, p1_peak (rapid_p1_peak), p2a (the package generated from the peak as
 %        generate_protocol2 makes it, in C:\matlabroot\G4_Protocols\nested_RF_protocol2\data), readout1,
-%        p2b, readout, build, p3b, p4, the arena dark at the end. About 40 min.
+%        p2b, readout, build, p3b, p4, the arena dark at the end. About 41 min.
 %
 %   Options (name, value): 'root' 'D:\nested_RF_sessions', 'p1_package' (default: the 6-px LHS package
 %   for side 'L'; required for 'R'), 'viewer' true, 'check_only' false, 'branch'

@@ -6,7 +6,8 @@ function fig = plot_rapid_readout(P)
 %     left   arena map (1-based columns and rows, row 1 at the top): the 88
 %            bar centers, the PD-axis and orthogonal bar sets, the 4-px
 %            lattice squares, the Protocol 4 core (blue) and line-scan (cyan)
-%            centers, the PD-frame window s -12..+16 px / v +-8 px, the RF
+%            centers, the PD-frame lattice window (P.window; s -14..+18 px /
+%            v +-8 px since 29 Oct 2026), the RF
 %            center (M6 x M6), the PD arrow and the 11 Prot3b sites;
 %     middle 80 ms bar-flash profile along the PD axis (s; + = trailing /
 %            proximal) with the post-flash minimum, the window and the sites;
