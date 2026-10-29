@@ -9,10 +9,13 @@ function html_file = session_results_page(run_dirs, out_dir, varargin)
 %     protocols    one section per protocol, the sessions in columns: recording quality (dark, step Vm),
 %                  Protocol 1 (map), Protocol 2 stage 1 (direction), Protocol 2 read-out 2 (center, bar
 %                  profiles), Prot3b (input resistance), Protocol 4 (map); step overviews folded under each
-%   Images open full size on click. Options: 'Labels' (cellstr, default the folder names), 'Title'.
+%   Images open full size on click. Options: 'Labels' (cellstr, default the folder names), 'Title',
+%   'Notes' (an HTML fragment file, shown first as its own section, e.g. the assessment against the
+%   protocol's objectives), 'Embed' (true: the figures are written into index.html as data URIs, so the
+%   page is one self-contained file that previews and mails intact; false: linked from img/).
 %   The session folders are only read. 28 October 2026.
 
-opts = struct('Labels', {{}}, 'Title', 'Auto_T4_v1 results');
+opts = struct('Labels', {{}}, 'Title', 'Auto_T4_v1 results', 'Notes', '', 'Embed', true);
 for k = 1:2:numel(varargin), opts.(varargin{k}) = varargin{k+1}; end
 run_dirs = cellstr(run_dirs); n = numel(run_dirs);
 if isempty(opts.Labels), opts.Labels = cellfun(@last_part, run_dirs, 'UniformOutput', false); end
@@ -86,7 +89,12 @@ for s = 1:size(sections, 1)
     body = [body '</section>']; %#ok<AGROW>
 end
 nav = strjoin(arrayfun(@(s) sprintf('<a href="#s%d">%s</a>', s, strtok(sections{s, 1}, ':')), 1:size(sections, 1), 'UniformOutput', false), ' ');
-cmp_html = ''; if ~isempty(cmp), cmp_html = sprintf('<section id="cmp"><h2>Comparison</h2><p class="cap">The read-outs side by side; Vm per step against the time of day.</p><a href="%s"><img class="wide" src="%s"></a></section>', cmp, cmp); end
+notes = '';
+if ~isempty(opts.Notes)
+    notes = sprintf('<section id="notes" class="notes">%s</section>', fileread(opts.Notes));
+    nav = ['<a href="#notes">Objectives</a> ' nav];
+end
+cmp_html = ''; if ~isempty(cmp), cmp_html = sprintf('<section id="cmp"><h2>Comparison</h2><p class="cap">The read-outs side by side; Vm per step against the time of day.</p><img class="wide" src="%s"></section>', cmp); end
 css = ['body{font:14px/1.45 -apple-system,Segoe UI,Arial,sans-serif;margin:0;background:#f6f7f9;color:#1d2330}' ...
     'header{background:#1d2330;color:#fff;padding:14px 24px;position:sticky;top:0;z-index:2}header h1{margin:0;font-size:19px}' ...
     'header .sub{opacity:.75;font-size:12px}nav a{color:#9cc3ff;margin-right:14px;font-size:13px;text-decoration:none}' ...
@@ -97,11 +105,26 @@ css = ['body{font:14px/1.45 -apple-system,Segoe UI,Arial,sans-serif;margin:0;bac
     'details{margin-top:8px}summary{cursor:pointer;color:#3d5a99;font-size:13px}' ...
     'table.num{border-collapse:collapse;font-size:13px;min-width:520px}table.num th,table.num td{padding:3px 12px;text-align:right;border-bottom:1px solid #eef0f3}' ...
     'table.num td:first-child,table.num th:first-child{text-align:left}table.num tr.grp td{font-weight:600;background:#f1f4f9;text-align:left;color:#33415c}' ...
-    'td.d{color:#6b4ca8}.top{display:grid;grid-template-columns:minmax(520px,640px) 1fr;gap:14px;align-items:start}@media(max-width:1100px){.top{grid-template-columns:1fr}}'];
+    'td.d{color:#6b4ca8}.top{display:grid;grid-template-columns:minmax(520px,640px) 1fr;gap:14px;align-items:start}@media(max-width:1100px){.top{grid-template-columns:1fr}}' ...
+    '.cell img,img.wide{cursor:zoom-in}#lb{display:none;position:fixed;inset:0;background:rgba(20,24,32,.88);z-index:9;align-items:center;justify-content:center;cursor:zoom-out}' ...
+    '#lb img{max-width:97vw;max-height:95vh;background:#fff;border-radius:4px}' ...
+    '.notes table{border-collapse:collapse;font-size:13px;width:100%;table-layout:fixed}.notes th,.notes td{padding:5px 9px;border-bottom:1px solid #eef0f3;text-align:left;vertical-align:top}' ...
+    '.notes thead th:nth-child(1){width:19%}.notes thead th:nth-child(2){width:17%}.notes thead th:nth-child(3){width:44%}.notes thead th:nth-child(4){width:20%}' ...
+    '.notes th{background:#f1f4f9;color:#33415c}.notes td.v{font-weight:600}.ok{color:#1d7a3a}.part{color:#a86400}.no{color:#b3261e}.open{color:#5a6272}' ...
+    '.notes h3{font-size:14px;margin:14px 0 4px}.notes p,.notes li{font-size:13px}'];
+lb = ['<div id="lb" onclick="this.style.display=''none''"><img alt=""></div><script>' ...
+    'document.querySelectorAll(''.cell img,img.wide'').forEach(function(i){i.onclick=function(){var b=document.getElementById(''lb'');' ...
+    'b.firstChild.src=i.src;b.style.display=''flex'';};});</script>'];
 html = sprintf(['<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title><style>%s</style></head><body>' ...
     '<header><h1>%s</h1><div class="sub">%s &middot; generated %s by session_results_page.m</div><nav>%s <a href="#cmp">Comparison</a></nav></header><main>' ...
-    '<div class="top"><section><h2>Numbers</h2>%s</section>%s</div>%s</main></body></html>'], ...
-    esc(opts.Title), css, esc(opts.Title), esc(strjoin(cellfun(@(d) char(d), run_dirs, 'UniformOutput', false), '  |  ')), char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm')), nav, tb, cmp_html, body);
+    '%s<div class="top"><section><h2>Numbers</h2>%s</section>%s</div>%s</main>%s</body></html>'], ...
+    esc(opts.Title), css, esc(opts.Title), esc(strjoin(cellfun(@(d) char(d), run_dirs, 'UniformOutput', false), '  |  ')), char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm')), nav, notes, tb, cmp_html, body, lb);
+if opts.Embed                                                             % figures as data URIs: one self-contained file
+    for p = unique(regexp(html, 'img/[^"]+\.png', 'match'))
+        fid = fopen(fullfile(out_dir, p{1}), 'r'); b = fread(fid, Inf, '*uint8'); fclose(fid);
+        html = strrep(html, ['"' p{1} '"'], ['"data:image/png;base64,' matlab.net.base64encode(b) '"']);
+    end
+end
 html_file = fullfile(out_dir, 'index.html');
 fid = fopen(html_file, 'w', 'n', 'UTF-8'); fprintf(fid, '%s', html); fclose(fid);
 end
@@ -112,7 +135,7 @@ for k = ks
     j = find(strcmp(keys, k{1}));
     h = [h sprintf('<div class="grid" style="grid-template-columns:repeat(%d,1fr)">', n)]; %#ok<AGROW>
     for i = 1:n
-        if isempty(F{i, j}), im = '<div class="missing">not recorded</div>'; else, im = sprintf('<a href="%s" target="_blank"><img loading="lazy" src="%s"></a>', F{i, j}, F{i, j}); end
+        if isempty(F{i, j}), im = '<div class="missing">not recorded</div>'; else, im = sprintf('<img src="%s">', F{i, j}); end
         h = [h sprintf('<div class="cell"><h3>%s</h3>%s</div>', esc(labels{i}), im)]; %#ok<AGROW>
     end
     h = [h '</div>']; %#ok<AGROW>
