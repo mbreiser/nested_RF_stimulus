@@ -24,12 +24,12 @@ R = analyze_session(run_dirs, 'Out', img, 'Labels', opts.Labels);
 M = R.metrics;
 
 % figures per session, by key
-keys = {'p1_maps', 'stage1', 'locations', 'p3b', 'p4', 'ov_dark30', 'ov_p1', 'ov_p2a', 'ov_p2b', 'ov_p3b', 'ov_p4'};
+keys = {'p1_maps', 'stage1', 'locations', 'p3b', 'p4', 'p4_detail', 'ov_dark30', 'ov_p1', 'ov_p2a', 'ov_p2b', 'ov_p3b', 'ov_p4'};
 F = repmat({''}, n, numel(keys));
 for i = 1:n
     rd = char(run_dirs{i}); lab = opts.Labels{i}; S = jsondecode(fileread(fullfile(rd, 'session_state.json')));
     src = {fullfile(rd, 'readout', [S.cell '_p1_maps.png']), fullfile(rd, 'readout', [S.cell '_stage1.png']), fullfile(rd, 'readout', [S.cell '_locations.png']), ...
-           fullfile(img, [lab '_p3b_analysis.png']), fullfile(img, [lab '_p4_analysis.png'])};
+           fullfile(img, [lab '_p3b_analysis.png']), fullfile(img, [lab '_p4_analysis.png']), fullfile(img, [lab '_p4_detail.png'])};
     for s = {'dark30', 'p1', 'p2a', 'p2b', 'p3b', 'p4'}
         d = dir(fullfile(rd, 'plots', sprintf('*_%s_overview.png', s{1}))); if isempty(d), src{end+1} = ''; else, src{end+1} = fullfile(d(1).folder, d(1).name); end %#ok<AGROW>
     end
@@ -75,7 +75,8 @@ sections = { ...
     'Protocol 2 stage 1: direction', '28 and 56 deg/s tuning, vector PDs, placement PD; the 28 deg/s trace per direction.', {'stage1'}, {'ov_p2a'}; ...
     'Protocol 2 stage 2 / read-out 2: center', 'The two placement-frame bar sets (80 ms peak and post-flash minimum), the RF center, the Prot3b sites and the Protocol 4 window.', {'locations'}, {'ov_p2b'}; ...
     'Prot3b: input resistance', '&Delta;R(t) = R(t) &minus; R<sub>gray</sub> from the &plusmn;0.5 pA pairs per region; 0 pA responses; the Mi9 holding series; pair QC on the Vm record.', {'p3b'}, {'ov_p3b'}; ...
-    'Protocol 4: combined map', '4-px lattice ON/OFF early and late, Gaussian fit, trailing hyperpolarization, 3-px core, 2-px line scans, OFF series, pass QC.', {'p4'}, {'ov_p4'}};
+    'Protocol 4: combined map', ['4-px lattice ON/OFF early and late, Gaussian fit, trailing hyperpolarization, 3-px core, 2-px line scans, OFF series, pass QC. ' ...
+        'Below it, the detail figure: position &times; time images, maps on an asymmetric scale (blue saturates at each panel''s minimum), and the three square sizes on common profiles.'], {'p4', 'p4_detail'}, {'ov_p4'}};
 body = '';
 for s = 1:size(sections, 1)
     body = [body sprintf('<section id="s%d"><h2>%s</h2><p class="cap">%s</p>', s, sections{s, 1}, sections{s, 2})]; %#ok<AGROW>

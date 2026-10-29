@@ -17,11 +17,14 @@ function A = analyze_p4(folder, varargin)
 %     core, lines the 3-px ON core (early window) and the 2-px ON line scans (s line at v = 0, v line at
 %                 s = 0), profiles with SE over passes, the column period (3.6-4 px) marked
 %     OFF series  the four 3-px OFF squares (s = 0, -4, -8, +4): mean dV traces
-%   Options: 'Cell' (title), 'Png' ('' = none), 'Figure' (true: visible), 'Name' (window name).
-%   A holds the per-square table (A.squares), A.passes, A.fit, A.trailing_extent_px, A.summary.
+%   Options: 'Cell' (title), 'Png' ('' = none), 'Figure' (true: visible), 'Name' (window name),
+%   'DetailPng' (a second figure, PLOT_P4_DETAIL: position x time images, maps with the hyperpolarization
+%   stretched, the three square sizes on common profiles; '' = not drawn).
+%   A holds the per-square table (A.squares), the per-square mean traces over the kept passes (A.traces,
+%   rows as A.squares, columns A.t_ms), A.passes, A.fit, A.trailing_extent_px, A.summary.
 %   28 October 2026.
 
-opts = struct('Cell', '', 'Png', '', 'Figure', true, 'Name', 'Protocol 4');
+opts = struct('Cell', '', 'Png', '', 'Figure', true, 'Name', 'Protocol 4', 'DetailPng', '');
 for k = 1:2:numel(varargin), opts.(varargin{k}) = varargin{k+1}; end
 t_all = tic;
 D = load_step_events(folder); E = D.E;
@@ -46,6 +49,8 @@ Q.n = splitapply(@(k) sum(k), keep, g);
 Q.early = splitapply(@(v, k) mean(v(k), 'omitnan'), E.early, keep, g);
 Q.late = splitapply(@(v, k) mean(v(k), 'omitnan'), E.late, keep, g);
 Q.early_se = splitapply(@(v, k) std(v(k), 'omitnan') / sqrt(max(sum(k), 1)), E.early, keep, g);
+Q.late_se = splitapply(@(v, k) std(v(k), 'omitnan') / sqrt(max(sum(k), 1)), E.late, keep, g);
+TR = splitapply(@(i) {mean(Xb(i(keep(i)), :), 1, 'omitnan')}, (1:height(E)).', g); TR = vertcat(TR{:});   % square x time
 
 % ---- Gaussian fit on the early lattice ON map
 L1 = Q(Q.item == "lattice" & Q.polarity == "ON", :);
@@ -58,7 +63,7 @@ for s = sx
     if v < -1, trail = s; elseif trail > 0, break; end
 end
 
-A = struct('folder', folder, 'events', E, 'squares', Q, 'passes', Pt, 'fit', F, 'trailing_extent_px', trail, 't_ms', t);
+A = struct('folder', folder, 'events', E, 'squares', Q, 'traces', TR, 'passes', Pt, 'fit', F, 'trailing_extent_px', trail, 't_ms', t);
 A.summary = struct('passes_kept', sum(Pt.kept), 'passes', height(Pt), 'flashes_missing', D.n_missing, ...
     'lattice_ON_peak_mV', max(L1.early), 'gauss_amp_mV', F.amp, 'gauss_s0_px', F.s0, 'gauss_v0_px', F.v0, ...
     'gauss_sigma_s_px', F.sig_s, 'gauss_sigma_v_px', F.sig_v, 'trailing_extent_px', trail, ...
@@ -134,7 +139,11 @@ txt = {'\bfread-outs\rm', ...
 text(ax, 0, 1, txt, 'VerticalAlignment', 'top', 'FontName', 'Consolas', 'FontSize', 8, 'Interpreter', 'tex');
 drawnow;
 if ~isempty(opts.Png), exportgraphics(fig, opts.Png, 'Resolution', 120); end
-A.figure = fig; A.seconds = toc(t_all);
+A.figure = fig;
+if ~isempty(opts.DetailPng)
+    A.detail_figure = plot_p4_detail(A, 'Cell', opts.Cell, 'Png', opts.DetailPng, 'Figure', opts.Figure, 'Name', [opts.Name ' detail']);
+end
+A.seconds = toc(t_all);
 end
 
 % ------------------------------------------------------------------------------------------------

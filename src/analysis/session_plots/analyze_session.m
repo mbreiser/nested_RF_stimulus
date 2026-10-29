@@ -72,9 +72,10 @@ for i = 1:n
     f4 = fullfile(rd, 'p4');
     if has_log(f4)
         png = fullfile(out, sprintf('%s_p4_analysis.png', lab));
-        A4 = analyze_p4(f4, 'Cell', sprintf('%s (%s)', lab, S.cell), 'Png', png, 'Figure', opts.Figure, 'Name', ['Protocol 4 ' lab]);
-        R.p4{i} = rmfield(A4, 'figure'); R.pngs{end+1} = png;
-        if ~opts.Figure, close(A4.figure); end
+        png2 = fullfile(out, sprintf('%s_p4_detail.png', lab));
+        A4 = analyze_p4(f4, 'Cell', sprintf('%s (%s)', lab, S.cell), 'Png', png, 'DetailPng', png2, 'Figure', opts.Figure, 'Name', ['Protocol 4 ' lab]);
+        R.p4{i} = rmfield(A4, {'figure', 'detail_figure'}); R.pngs = [R.pngs, {png, png2}];
+        if ~opts.Figure, close([A4.figure, A4.detail_figure]); end
         m.p4_lattice_ON_peak_mV = A4.summary.lattice_ON_peak_mV; m.p4_gauss_sigma_s_px = A4.summary.gauss_sigma_s_px; m.p4_gauss_sigma_v_px = A4.summary.gauss_sigma_v_px;
         m.p4_trailing_extent_px = A4.summary.trailing_extent_px; m.p4_late_min_mV = A4.summary.lattice_ON_late_min_mV; m.p4_passes_kept = A4.summary.passes_kept;
     else
