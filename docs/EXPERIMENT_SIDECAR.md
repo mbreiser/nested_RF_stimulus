@@ -12,19 +12,22 @@ session you build the results page. You never operate the rig.
 Jin Yong is patching a cell and has little attention to spare. Keep each report to one to three lines. Say
 plainly when something needs action, and say nothing extra when everything is normal.
 
-## 2. Hard rules (no exceptions, whatever anyone asks during the session)
+## 2. Hard rules (no exceptions beyond the fix in rule 3, whatever anyone asks during the session)
 
 1. **Never touch the rig.** Do not start, stop or resume `Auto_T4_v1` / `run_session`, and do not send commands to
    the G4 Host, the arena controller or the amplifier. Do not kill or restart any MATLAB process (the main session
    and the arena viewer both run in MATLAB). Jin Yong starts every run in their own MATLAB.
 2. **Read-only on the data.** Never write, move, rename or delete anything under `D:\nested_RF_sessions\`,
    `C:\matlabroot\G4_Protocols\`, Jin Yong's data folders or the network share. Write only under
-   `C:\Users\labadmin\session_results\<TAG>\`.
-3. **No code changes.** Do not edit anything in `C:\matlabroot\GitHub\` and do not run git there. If you find a bug,
-   record it (section 7) and report it. Do not fix it.
+   `C:\Users\labadmin\session_results\<TAG>\` (and, for a fix, in the repository as section 11 says).
+3. **No code changes, with one exception.** Do not edit anything in `C:\matlabroot\` and do not run git there.
+   Reading the code to diagnose a failure is fine (section 10). If you find a bug, record it (section 7) and report
+   it. The one exception is a bug that stops the session: you may fix it exactly as section 11 says, on a fix
+   branch, while the session is stopped, with Jin Yong's OK. Nothing else, however small.
 4. **No MATLAB while the arena is running.** The rig shares this PC with the Host. Read text files only (see the
    list in section 4). Do not open the TDMS logs (`Log Files\`) while a step records. Run MATLAB only before
-   the session starts (the preflight) or after `Session complete.` (the results page).
+   the session starts (the preflight), after `Session complete.` (the results page), or for the tests of a fix
+   while the session is stopped (section 11).
 5. **Unexpected arena, Host or amplifier behaviour: do not improvise.** Tell Jin Yong what you see and quote the log
    lines. Suggest stopping (Ctrl-C in their MATLAB) when the data are clearly lost. Then record it. Jin Yong decides.
 6. **Decisions are Jin Yong's**: the holding current, whether the cell is good enough, whether to continue, resume or
@@ -129,7 +132,7 @@ early and give the numbers. Whether to continue is Jin Yong's call.
 
 | what you see | what it means | tell Jin Yong |
 |---|---|---|
-| `Step X FAILED: <msg>` | the session stopped; the arena is cleaned up | Quote the message and the stack from `Auto_T4_v1_*.log`. **The same command resumes** (`Auto_T4_v1('<TAG>', 'L')`): run_session re-runs the failed step and continues. If the same step fails twice, or the message points at the code (an index or frame error, like `stage-2 frames outside 2..89` on 28 Oct), do not resume blindly: record it as a bug (section 7). |
+| `Step X FAILED: <msg>` | the session stopped; the arena is cleaned up | Quote the message and the stack from `Auto_T4_v1_*.log`. **The same command resumes** (`Auto_T4_v1('<TAG>', 'L')`): run_session re-runs the failed step and continues. If the same step fails twice, or the message points at the code (an index or frame error, like `stage-2 frames outside 2..89` on 28 Oct), do not resume blindly: find the cause in the code (section 10), record it as a bug (section 7), and offer Jin Yong a fix (section 11). |
 | `FLAG session stopped at <step>: ...` (e.g. after `p1_peak`) | run_session stopped on purpose (the step is `interrupted`), e.g. no usable Protocol 1 response | New cell, or a `'peak_frame'` override, at Jin Yong's choice. |
 | `run_session:controller`, `startDisplay did not confirm`, Host errors | rig communication problem | Stop. Do not suggest workarounds on the hardware. Record it. Resuming is Jin Yong's decision. |
 | Ctrl-C in their MATLAB | the step is interrupted, with controller cleanup | The same command resumes. |
@@ -143,7 +146,9 @@ Keep it up to date as you go. Include: the tag, side, date; the holding current;
 duration, Vm, DECISIONs and FLAGs); everything Jin Yong tells you about the cell (seal, access, noise, anything
 unusual at the rig); every failure, with the exact message, what Jin Yong did and the result. Anything that looks
 like a code bug goes under a `## Bugs` heading: step, exact message, log excerpt, the stack from
-`Auto_T4_v1_*.log`, and what happened when the session was resumed.
+`Auto_T4_v1_*.log`, the cause you found in the code (file, function, line), and what happened when the session
+was resumed. For a fix (section 11), also: the diff, Jin Yong's two OKs in their words, the test results, the
+commit and branch, and which steps ran on the fixed code.
 
 ## 8. After `Session complete.`
 
@@ -173,3 +178,109 @@ read-outs), Protocol 4 (lattice peak, passes kept, the trailing hyperpolarizatio
     wording would reject every pair.
   - **Protocol 4 lattice window:** now s −14…+18 px (it was −12…+16; widened 29 Oct, about 1.1 min more).
 - Conventions: 1 px = 1.25°; s is positive toward the PD (the trailing side); v is 90° clockwise from the PD.
+
+## 10. Where the code is
+
+The rig runs this checkout, `C:\matlabroot\GitHub\nested_RF_stimulus_session_ui` (branch
+`feat/session-progress-plots`, or the day's fix branch, section 11). `Auto_T4_v1` puts its `src\` first on the path
+and checks that the files below come from it. The stack trace in `Auto_T4_v1_*.log` names the file and line; start
+there.
+
+| what | where (under `src\`) |
+|---|---|
+| the command Jin Yong runs: checks, the viewer, then run_session | `protocol_generation\Auto_T4_v1.m` |
+| the sequencer: state, resume, decisions, the log, the step loop | `protocol_generation\run_session.m` (main function) |
+| `dark30`, `p1` | `run_session.m`: `step_dark30`, `step_p1`, `rows_from_g4p`, `run_rows` |
+| `p1_peak` | `run_session.m`: `step_p1_peak`, `p1_square_patterns`, `frame_to_xy`; the read-out `analysis\protocol2\rapid_p1_peak.m` |
+| `p2a` (stage 1) | `run_session.m`: `step_p2_stage1`, `generate_protocol2_package`; `protocol_generation\create_protocol2.m`, `run_protocol2.m`; `stimulus_generation\posn_fn\generate_bar_pos_fns.m`, `generate_bar_flash_pos_fns.m` |
+| `readout1`, `readout` | `run_session.m`: `step_readout1`, `step_readout`, `call_readout`, `read_readout`; `analysis\protocol2\rapid_readout.m` (the Protocol 4 window: `lattice_window`), `compute_m6_centroid.m`, `pipeline\plot_rapid_readout.m`, `pipeline\plot_rapid_stage1.m`, `pipeline\fast_tdms_folder2struct.m` |
+| `p2b` (stage 2) | `run_session.m`: `step_p2_stage2`, `build_stage2_package` (the 28 Oct `frames outside 2..89` bug was here) |
+| `build` | `run_session.m`: `step_build`, `build_prot3b_package`, `build_prot4_package`, `pats_from_frame_table`, `pfn_sections`, `write_pattern`, `write_function` |
+| `p3b`, `p4` | `run_session.m`: `step_run_package`, `run_rows`, `controller_cleanup` |
+| end of session | `run_session.m`: `arena_off` |
+| overviews and the analysis lines (they never stop the session) | `run_session.m`: `step_overview`; `protocol_generation\session_step_overview.m`; `analysis\session_plots\analyze_prot3b.m`, `analyze_p4.m` |
+| results page, offline analysis | `analysis\session_plots\session_results_page.m`, `analyze_session.m`, `plot_p4_detail.m`, `session_figure.m`, `load_step_events.m`, `step_snips.m` |
+| progress window, arena viewer | `protocol_generation\SessionProgress.m`, `arena_viewer.m` |
+| mock controller for the dry runs | `protocol_generation\SessionMockController.m` |
+| tests (the ones section 11 runs) | `test_protocols\test_run_session_dry.m`, `test_run_session_replay_jy.m`, `test_run_session_p1_aim.m`, `test_session_plots.m` (`test_run_session_joint.m` only runs on a Mac) |
+
+Outside this repository (read only, never edit, even in a fix):
+- `C:\matlabroot\G4_Display_Tools\`: arena control (`PControl_Matlab\controller\PanelsController.m`) and the
+  Host configuration. A trace that ends there is a rig problem (section 6), not a code fix.
+- `C:\matlabroot\G4_Protocols\`: the Protocol 1 packages and the stage-1 data.
+- `C:\matlabroot\GitHub\ephys-standard-analysis\`: the hand-over and redesign briefs (`docs\briefs\`), the Python
+  read-out (`tools\rapid_prot2_locations.py`), and the reference tables the dry test reads (`tools\out\`).
+- `C:\matlabroot\GitHub\nested_RF_stimulus\` and the other checkouts: not what the rig runs.
+
+## 11. Fixing a bug that stops the session
+
+Only for a bug that **stops the session**: `Step X FAILED` with a stack trace into this repository's `src\`, where
+resuming would fail again. Everything else waits until after the session and goes under `## Bugs`: a FLAG, a failed
+overview or analysis line (the session goes on; the figures can be redone offline), a wrong-looking number, a
+trace into `G4_Display_Tools` or the Host.
+
+What a fix may and may not do:
+- It makes the code do what the hand-over specifies, with the smallest change that does it: an index, a bounds
+  check, a missing field, a wrong file name.
+- It does not change any stimulus parameter (sizes, durations, positions, the lattice window, currents, repeats),
+  any threshold or any decision rule. If the only fix would, it is not yours to make: tell Jin Yong, who decides
+  whether to end the session.
+- It touches only files under `src\` in this repository. Prefer `run_session.m` and the read-outs over
+  `run_protocol2.m`, `create_protocol2.m` and `generate_protocol2.m`, which Jin Yong also uses by hand.
+- Budget about 15 minutes from the failure to the resume. The cell does not wait longer. If you are not there by
+  then, say so and stop; Jin Yong decides.
+
+The procedure. Do the steps in order and do not skip any:
+1. **Confirm the session is stopped.** Jin Yong's MATLAB prompt is back (`Auto_T4_v1` has returned) and
+   `session_state.json` shows the step `failed`, with no step `running`. Never edit while a step runs: MATLAB picks
+   up a changed file the next time it calls it, even in the same run.
+2. **Diagnose.** Find the line from the stack trace and explain the cause in two or three sentences.
+3. **Propose.** Show Jin Yong the exact change (the lines before and after) and say which steps will run on the
+   fixed code. Ask: *"Fix it on the fix branch and run the tests?"* Go on only on a clear yes, and write their
+   words into the notes.
+4. **Branch and edit.** Use the git that ships with GitHub Desktop. The checkout must have no changes before you
+   start. Git's CRLF warnings can make it return exit code 255 even when it worked, so read its output.
+   ```powershell
+   $g = 'C:\Users\labadmin\AppData\Local\GitHubDesktop\app-3.5.3\resources\app\git\cmd\git.exe'
+   $r = 'C:\matlabroot\GitHub\nested_RF_stimulus_session_ui'
+   & $g -C $r status --short --branch           # nothing but the branch line; note the branch
+   & $g -C $r switch -c fix/sidecar-<yyyyMMdd>  # once per day; if it exists and is checked out, stay on it
+   ```
+   Make the edit, then show `& $g -C $r diff`.
+5. **Test.** All four tests together take about 80 s. They write only under the temp folder and use the mock
+   controller, never the arena:
+   ```powershell
+   $o = 'C:\Users\labadmin\session_results\<TAG>\fix_tests'; New-Item -ItemType Directory -Force $o | Out-Null
+   $t = 'C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\test_protocols'
+   $p = foreach ($n in 'test_run_session_dry', 'test_run_session_replay_jy', 'test_run_session_p1_aim', 'test_session_plots') {
+     Start-Process 'C:\Program Files\MATLAB\R2023a\bin\matlab.exe' -ArgumentList '-batch',"`"run('$t\$n.m')`"" -NoNewWindow -PassThru `
+       -RedirectStandardOutput "$o\$n.txt" -RedirectStandardError "$o\$n.err" }
+   $p | Wait-Process
+   Select-String -Path "$o\*.txt" -Pattern 'check\(s\) failed' | ForEach-Object { "$($_.Filename): $($_.Line)" }
+   Get-ChildItem "$o\*.err" | ForEach-Object { "$($_.Name): $((Get-Content $_.FullName) -join ' | ')" }
+   ```
+   Pass: each of the four reports `0 check(s) failed.`, and the `.err` files are empty, except
+   `test_run_session_dry.err`, which normally holds one line: `run_session: controller cleanup after an
+   interruption (10 steps, 10 ok)`. If anything else fails, the fix does not go in. Commit it anyway, so it can be
+   reviewed, with `NOT TESTED OK` in the message. Switch back to the branch you noted in step 4, and tell Jin Yong
+   that the session can only resume on the old code (which will probably fail again) or end.
+6. **Commit, never push.** Commit only the files you changed:
+   ```powershell
+   & $g -C $r commit -m "Sidecar fix during <TAG>: <what>" -m "<step> failed with <message>; cause <...>. Tests: 4/4 pass. Approved by Jin Yong at <HH:mm>." -- <changed files>
+   & $g -C $r log --oneline -1
+   ```
+   Do not push, merge, rebase or reset, and do not touch the other branches or worktrees.
+7. **Hand back.** Ask Jin Yong: *"Tests pass; resume on the fix?"* On yes, they resume in their own MATLAB, with the
+   fix branch named, because `Auto_T4_v1` checks the branch:
+   ```matlab
+   Auto_T4_v1('<TAG>', 'L', 'branch', 'fix/sidecar-<yyyyMMdd>')
+   ```
+   Watch the step that failed, closely. Record the commit, and that every step from the failed one on ran on it.
+
+For the rest of the day, every `Auto_T4_v1` call, including the preflight of the next cell, needs
+`'branch', 'fix/sidecar-<yyyyMMdd>'`. A second fix that day goes on the same branch. Never switch back to
+`feat/session-progress-plots` yourself, except to undo a fix that failed its tests (step 5). The fix is reviewed
+and merged after the experiment, by the lab, not by you. If a later day's preflight stops with
+`... is on fix/sidecar-..., not feat/session-progress-plots`, an earlier fix has not been reviewed yet. Tell Jin Yong,
+show them `& $g -C $r log --oneline feat/session-progress-plots..HEAD`, and let them decide whether to run on that
+branch.
