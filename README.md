@@ -96,6 +96,10 @@ Stimulus grids and timing: [src/analysis/README.md](src/analysis/README.md).
 
 ## Related
 
+- **Automated per-cell session (since 27 Oct 2026):** `Auto_T4_v1` in `src/protocol_generation` runs the whole sequence
+  (dark, Protocol 1, two-stage Protocol 2, Prot3b, Protocol 4) through `run_session`; its specification is the hand-over
+  `docs/briefs/JY_PROTOCOL_HANDOVER_20261026.md` in `ephys-standard-analysis`. A Claude session can supervise it read-only:
+  [docs/EXPERIMENT_SIDECAR.md](docs/EXPERIMENT_SIDECAR.md).
 - [Full instructions and troubleshooting](https://leburnett.github.io/reiser-documentation/Ephys/ephys_nested_rf.html) — the canonical step-by-step guide.
 - [`G4_Display_Tools`](https://github.com/leburnett/G4_Display_Tools) — arena control.
 
