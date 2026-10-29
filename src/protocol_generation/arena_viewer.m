@@ -168,7 +168,7 @@ V = struct('figure', fig, 'timer', tm, 'stop', @close_viewer);
                 case 'p2'
                     m = sprintf(['Step p2 (Protocol 2, full mode) is running: run_protocol2 writes no now_playing.json,\n' ...
                         'so there is no preview for this step. Started %s.'], st(1).t_start);
-                case {'p1', 'p2a', 'p2b', 'p3b', 'p4'}
+                case {'p1', 'p1_confirm', 'p2a', 'p2b', 'p3b', 'p4'}
                     m = sprintf('Step %s (%s) is running: waiting for its next row.', st(1).id, st(1).label);
                 otherwise
                     m = sprintf('Step %s (%s) is running: no stimulus rows.', st(1).id, st(1).label);

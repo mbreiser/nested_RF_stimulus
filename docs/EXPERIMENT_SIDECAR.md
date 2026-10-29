@@ -75,7 +75,8 @@ Stage 1 of Protocol 2 is recorded in `C:\matlabroot\G4_Protocols\nested_RF_proto
 the session folder. You can look at the PNGs: they are written once, when a step ends.
 
 Log line formats (`yyyy-MM-dd [HH:mm:ss] ...`):
-- `---- k/10  <step>  (<label>, about N min) ----`: a step starts
+- `---- k/12  <step>  (<label>, about N min) ----`: a step starts (12 steps since the re-aim was added; `reaim` and
+  `p1_confirm` are steps 4 and 5)
 - `Step <step> done in N min.`, `Step <step> FAILED: <message>`, `Step <step> skipped: <reason>`
 - `Overview <step> (...): ... Vm median X mV (first min, last min, drift +D mV) ...`
 - `DECISION <step>/<name>: <outcome>`. A decision that fell back to a backup rule is prefixed with `FLAG`.
@@ -112,17 +113,63 @@ Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice wide
 | 1 | `dark30`: 30 s dark at 0 pA | 0.5 min, plus Jin Yong's prompt | `Overview dark30`: resting Vm. Healthy on 28 Oct: −58 mV. The degraded rerun read −41 mV. Then Jin Yong **types the holding current** (`Holding current recorded as "..."`). The current monitor reads a constant 2–4 pA offset; that is normal. |
 | 2 | `p1`: Protocol 1 coarse map | 6.2 min | `Overview p1`: Vm (−67 mV on 28 Oct). `FLAG p1: Vm drifted ±D mV` fires above 5 mV of drift. |
 | 3 | `p1_peak` | seconds | `DECISION p1_peak/aim: frame F at col/row [c r]`. Uses the 6-px grid peak when ≥ 2 mV, else the 12-px grid (FLAG). Below 2 mV on both grids the session **stops** (`FLAG session stopped at p1_peak: Protocol 1 peak ... below the floor ...`): no usable response, so Jin Yong decides (new cell, or a `'peak_frame'` override). |
-| 4 | `p2a`: Protocol 2 stage 1, the sweeps | 8.3 min | `Overview p2a`. Watch for the drift FLAG. |
-| 5 | `readout1` | seconds | `DECISION readout1/placement_pd: placement PD X deg (rule mean ...)`. Normal: rule `mean`, 28 and 56 °/s within a few degrees (1.1° on 28 Oct). Rule `28_only` means they differ by more than 10°: note it. `usable_pd: stage 2 plays the 22 bars` is normal. `FLAG stage 2 fallback: all 88 bars as today (N rows, M min)` makes step 6 last M min instead of 2: tell Jin Yong. |
-| 6 | `p2b`: stage 2, 22 bars × 3 | 2.2 min | |
-| 7 | `readout` | seconds | `Read-out (...): ... center col/row [c r], ... center peak X mV`, then `DECISION readout/center`. Normal: `read-out M6 center; tables shifted by [0 0] px`. `FLAG DECISION readout/center: Protocol 1 peak ...` means the center failed a sanity check (more than 6 px from the Protocol 1 peak, more than 4 px off the bar set, or a center peak below 3 mV). The session continues aimed at the Protocol 1 peak: tell Jin Yong and note it. |
-| 8 | `build` | seconds | `Prot3b: 26 frames, 26 blocks, 7.6 min; Protocol 4: ~450 frames, ~1780 flashes, ~15 min.` `FLAG Prot3b build:` or `FLAG Protocol 4 build:` list squares off the screen. A few is fine; most is not. |
-| 9 | `p3b`: Prot3b, ±0.5 pA via AO2 | 7.8 min | `Analysis p3b: R_gray G GOhm; pairs kept k/8; dR ...`. 28 Oct: 13 GΩ, 6/8, ON center −5.7 GΩ. `FLAG p3b: only k of 8 pairs pass the baseline QC` means fewer than 4 pairs kept: the cell drifted. The cell is not dropped for drift; drift is a result. |
-| 10 | `p4`: Protocol 4, combined map | ~15.4 min | `Analysis p4: lattice ON peak X mV; ... passes kept k/6`. 28 Oct: 17.4 mV, 6/6. `FLAG p4: k of 6 passes within 5 mV of pass 1` means the cell drifted. |
+| 4 | `reaim`: arena re-aim check | seconds; 1–2 min when it fires | Normal for most cells: `DECISION reaim/edge_check: no re-aim: A px above and B px below the peak (>= 14)`, and step 5 is skipped (`Step p1_confirm skipped: no re-aim`). **When it fires** (`DECISION reaim/edge_check: RE-AIM: peak D px from the top/bottom edge (< 14)`), the session **waits for Jin Yong** at a boxed `RE-AIM THE ARENA` prompt in their MATLAB (see section 5a). That wait is expected, not a hang. |
+| 5 | `p1_confirm`: quick Protocol 1 at the re-aimed RF | about 0.6 min, only after a rotation | `DECISION p1_confirm/confirm: GOOD: found col/row [c r], predicted [c r] (row offset ±x px); Protocol 2 is aimed there` is a good confirmation. `FLAG DECISION p1_confirm/confirm: CHECK: ...` lists what was off (section 5a). |
+| 6 | `p2a`: Protocol 2 stage 1, the sweeps | 8.3 min | `Overview p2a`. Watch for the drift FLAG. After a re-aim, the `Protocol 2 package generated for peak frame F ... aimed at col/row [c r]` line must show the **confirmed** position, not the Protocol 1 one. |
+| 7 | `readout1` | seconds | `DECISION readout1/placement_pd: placement PD X deg (rule mean ...)`. Normal: rule `mean`, 28 and 56 °/s within a few degrees (1.1° on 28 Oct). Rule `28_only` means they differ by more than 10°: note it. `usable_pd: stage 2 plays the 22 bars` is normal. `FLAG stage 2 fallback: all 88 bars as today (N rows, M min)` makes step 8 last M min instead of 2: tell Jin Yong. |
+| 8 | `p2b`: stage 2, 22 bars × 3 | 2.2 min | |
+| 9 | `readout` | seconds | `Read-out (...): ... center col/row [c r], ... center peak X mV`, then `DECISION readout/center`. Normal: `read-out M6 center; tables shifted by [0 0] px`. `FLAG DECISION readout/center: Protocol 1 peak ...` means the center failed a sanity check (more than 6 px from the Protocol 1 peak, more than 4 px off the bar set, or a center peak below 3 mV). The session continues aimed at the Protocol 1 peak: tell Jin Yong and note it. |
+| 10 | `build` | seconds | `Prot3b: 26 frames, 26 blocks, 7.6 min; Protocol 4: ~450 frames, ~1780 flashes, ~15 min.` `FLAG Prot3b build:` or `FLAG Protocol 4 build:` list squares off the screen. A few is fine; most is not. |
+| 11 | `p3b`: Prot3b, ±0.5 pA via AO2 | 7.8 min | `Analysis p3b: R_gray G GOhm; pairs kept k/8; dR ...`. 28 Oct: 13 GΩ, 6/8, ON center −5.7 GΩ. `FLAG p3b: only k of 8 pairs pass the baseline QC` means fewer than 4 pairs kept: the cell drifted. The cell is not dropped for drift; drift is a result. |
+| 12 | `p4`: Protocol 4, combined map | ~15.4 min | `Analysis p4: lattice ON peak X mV; ... passes kept k/6`. 28 Oct: 17.4 mV, 6/6. `FLAG p4: k of 6 passes within 5 mV of pass 1` means the cell drifted. |
 | – | end | | `Arena off (allOff): panels dark.` then `Session complete.` A `FLAG arena not turned off` means Jin Yong must switch the arena off by hand. |
 
 After every step, report: the step, its duration against the table, Vm, and any DECISION or FLAG in plain words.
 Example: *"p2a done, 8.3 min, Vm −70 mV, steady. Placement PD 271°, both speeds agree. Stage 2 next (2 min)."*
+
+### 5a. The arena re-aim (steps 4 and 5; added 29 Oct, branch `feat/arena-reaim`)
+
+**Why.** Protocol 2 crops its bars and flashes to 30 px around the Protocol 1 peak, and the Prot3b sites reach
+14 px from it. A peak within 14 px of the top or bottom edge (on the 6-px grid: rows 3.5, 9.5, 39.5, 45.5) would
+leave much of those stimuli off the screen. Before 29 Oct, Jin Yong moved the display by hand or gave up the cell.
+Now the sequencer asks for a rotation of the swiveling base instead, so these cells can be recorded. Cells whose peak
+is not near an edge are not affected, and nothing is asked.
+
+**The prompt** (Jin Yong's MATLAB, boxed `RE-AIM THE ARENA`). It gives the peak's col/row, its distance to the edge,
+and an angle such as `Rotate the stage by +18.5 deg (from +0 to +18.5 deg on its scale)`. It also gives the expected
+move: `the RF moves 14.8 px DOWN (toward row 48), to row 24.3`. The angle re-centers the peak on row 24.5:
+(24.5 − row) × 1.25° × `reaim_sign`, rounded to 0.5° and limited to the stage's ±20°. When the limit cuts it,
+the prompt says `CLAMPED`. Jin Yong rotates the base and presses Enter, then types the angle actually moved
+(Enter accepts the suggestion). Typing `s` skips the re-aim, and the session continues at the edge peak. A long
+wait at this prompt is normal. Do not report it as a hang.
+
+**What is recorded** (`decisions.json`):
+- `reaim/edge_check`: the room above and below the peak, and the margin (14 px).
+- `reaim/rotation`: the angle wanted, suggested and actually moved, whether it was clamped, the stage reading
+  before and after, the sign convention, and the predicted new col/row. Flags: `moved X deg, suggested Y`,
+  `clamped ...`, `operator_skip`, `stage_at_limit`.
+- `p1_confirm/confirm`: the predicted and found col/row, the offset, and ΔV before and after.
+
+The confirmation package and its event ledger are in `<TAG>\p1_confirm\`. The Protocol 1 peak from before the move
+is kept in `session_state.json` under `out.p1_peak.before_reaim`.
+
+**A good confirmation:** `GOOD`. The found row is within 6 px (one 6-px square) of the predicted row, the peak is not
+on the confirmation window's outer squares, it has ≥ 14 px of screen on both sides, and its ΔV is comparable to
+the Protocol 1 peak's. Report it in one line, for example: *"Re-aimed +18.5°, RF found at row 21.5 (predicted
+24.3), 7 mV; Protocol 2 aimed there."*
+
+**A bad confirmation:** `FLAG ... CHECK`, with the reasons in the flags:
+- `moved the OPPOSITE way to the prediction: reaim_sign is wrong`. Tell Jin Yong. The aim is still right,
+  because it uses the measured peak. The sign must be fixed (`'reaim_sign', -1`) before the next cell.
+- `moved +a rows, predicted +b`: the degrees-per-pixel or the angle typed is off. Note both numbers.
+- `peak on the window's edge`: the RF may lie beyond the 25 × 25-px window. The aim is uncertain, so watch the
+  `readout/center` check later.
+- `still near the edge`: the rotation was not enough, for example because it was clamped.
+- **No response:** `FLAG session stopped at p1_confirm: no response above 2 mV in the re-aim window ...`. Either the
+  base turned the wrong way (the RF went toward or past the edge) or the cell is lost. Check the Vm in
+  `Overview p1_confirm`. If the cell is fine, Jin Yong rotates the base back to the reading before the re-aim and
+  resumes with `'reaim_reset', true` (and `'reaim_sign', -1` if the direction was wrong). The prompt then comes
+  again.
 
 **Signs the cell is going** (run 2 on 28 Oct is the example): Vm climbing step after step (−41 → −25 mV), drift
 FLAGs on consecutive steps, R_gray falling (13 → 5.4 GΩ), Prot3b pairs and Protocol 4 passes rejected. Say so
@@ -134,6 +181,7 @@ early and give the numbers. Whether to continue is Jin Yong's call.
 |---|---|---|
 | `Step X FAILED: <msg>` | the session stopped; the arena is cleaned up | Quote the message and the stack from `Auto_T4_v1_*.log`. **The same command resumes** (`Auto_T4_v1('<TAG>', 'L')`): run_session re-runs the failed step and continues. If the same step fails twice, or the message points at the code (an index or frame error, like `stage-2 frames outside 2..89` on 28 Oct), do not resume blindly: find the cause in the code (section 10), record it as a bug (section 7), and offer Jin Yong a fix (section 11). |
 | `FLAG session stopped at <step>: ...` (e.g. after `p1_peak`) | run_session stopped on purpose (the step is `interrupted`), e.g. no usable Protocol 1 response | New cell, or a `'peak_frame'` override, at Jin Yong's choice. |
+| `FLAG session stopped at p1_confirm: no response ...` | nothing in the re-aim window: wrong rotation direction, or the cell is lost | Section 5a: rotate the base back, then resume with `'reaim_reset', true` (and `'reaim_sign', -1` if the base turned the wrong way). |
 | `run_session:controller`, `startDisplay did not confirm`, Host errors | rig communication problem | Stop. Do not suggest workarounds on the hardware. Record it. Resuming is Jin Yong's decision. |
 | Ctrl-C in their MATLAB | the step is interrupted, with controller cleanup | The same command resumes. |
 | the cell is lost | | `Auto_T4_v1('<TAG>', 'L', 'abandon', true)` closes the session. The next cell gets a **new tag**. |
@@ -177,6 +225,8 @@ read-outs), Protocol 4 (lattice peak, passes kept, the trailing hyperpolarizatio
     other, and every block within 5 mV of the first block of its current (agreed 29 Oct). The hand-over's
     wording would reject every pair.
   - **Protocol 4 lattice window:** now s −14…+18 px (it was −12…+16; widened 29 Oct, about 1.1 min more).
+  - **Arena re-aim** (29 Oct, section 5a). Parameters and the rig test: `docs/notes/ARENA_REAIM_20261029.md` in
+    `nested_RF_stimulus`.
 - Conventions: 1 px = 1.25°; s is positive toward the PD (the trailing side); v is 90° clockwise from the PD.
 
 ## 10. Where the code is

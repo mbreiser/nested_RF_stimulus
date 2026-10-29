@@ -58,7 +58,8 @@ exp1 = fullfile(scratch, 'cell_A_full');
 S = run_session(exp1, 'dry_run', true, 'cell', 'JY1008', 'side', 'L', 'p2_mode', 'full', 'p1_package', p1_package, ...
     'peak_frame', peak_frame, 'readout_dir', readout_dir, 'analysis_repo', analysis_repo);
 st = containers.Map({S.steps.id}, {S.steps.status});
-check(isequal({S.steps.id}, {'dark30', 'p1', 'p1_peak', 'p2', 'readout', 'build', 'p3b', 'p4'}) && all(strcmp(values(st), 'done')), 'full mode: 8 steps, all done');
+check(isequal({S.steps.id}, {'dark30', 'p1', 'p1_peak', 'reaim', 'p1_confirm', 'p2', 'readout', 'build', 'p3b', 'p4'}) && strcmp(st('p1_confirm'), 'skipped') && ...
+    all(strcmp(values(st, setdiff(keys(st), {'p1_confirm'})), 'done')), 'full mode: 10 steps, all done (peak at row 27.5: no re-aim, p1_confirm skipped)');
 check(isfile(fullfile(exp1, 'session_state.json')) && isfile(fullfile(exp1, 'session_log.txt')) && isfile(fullfile(exp1, 'decisions.json')), 'state, log and decision files written');
 D = S.decisions; dn = {D.decision};
 check(any(strcmp(dn, 'aim')) && contains(D(strcmp(dn, 'aim')).outcome, 'override') && isequal(S.out.p1_peak.xy, p1xy), 'decision aim: peak frame override logged with its col/row');
@@ -99,7 +100,8 @@ exp2 = fullfile(scratch, 'cell_B_two_stage');
 S2 = run_session(exp2, 'dry_run', true, 'cell', 'JY1008', 'side', 'L', 'p1_package', p1_package, 'peak_frame', peak_frame, ...
     'p2_folder', p2pkg, 'readout_dir', readout_dir, 'n_reps_stage2', 5, 'analysis_repo', analysis_repo);
 st2 = containers.Map({S2.steps.id}, {S2.steps.status});
-check(isequal({S2.steps.id}, {'dark30', 'p1', 'p1_peak', 'p2a', 'readout1', 'p2b', 'readout', 'build', 'p3b', 'p4'}) && all(strcmp(values(st2), 'done')), 'two-stage mode: 10 steps, all done');
+check(isequal({S2.steps.id}, {'dark30', 'p1', 'p1_peak', 'reaim', 'p1_confirm', 'p2a', 'readout1', 'p2b', 'readout', 'build', 'p3b', 'p4'}) && strcmp(st2('p1_confirm'), 'skipped') && ...
+    all(strcmp(values(st2, setdiff(keys(st2), {'p1_confirm'})), 'done')), 'two-stage mode: 12 steps, all done (no re-aim, p1_confirm skipped)');
 sa = jsondecode(fileread(fullfile(p2pkg, 'Reports', 'run_status.json')));
 check(sa.rows_total == 21 && all(~ismember([sa.rows.pattern_id], [4 5])) && abs(sum([sa.rows.duration_s]) - 3*(10 + 3.3*2 + 2.1*2 + 3 + 3)) < 1e-6, 'stage 1: 7 non-bar-flash conditions x 3 reps = 21 rows, 80.4 s, no bar-flash pattern');
 d2 = S2.decisions; dn2 = {d2.decision};
