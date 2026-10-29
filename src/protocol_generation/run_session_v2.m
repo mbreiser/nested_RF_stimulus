@@ -1,0 +1,2136 @@
+function S = run_session_v2(exp_folder, varargin)
+%RUN_SESSION_V2  RUN_SESSION with the arena re-aim after Protocol 1 (steps reaim, p1_confirm; 29 Oct 2026).
+%
+%   A copy of run_session.m (feat/session-progress-plots, 29 Oct 2026) with the re-aim added. run_session.m is
+%   left unchanged as the fallback (Auto_T4_v1); Auto_T4_v2 runs this file. Do not resume a session folder
+%   started by one runner with the other (the step lists differ); a fallback cell gets a new tag.
+%
+%   S = RUN_SESSION_V2(EXP_FOLDER)                       start, or RESUME, the session kept in EXP_FOLDER
+%   S = RUN_SESSION_V2(EXP_FOLDER, 'name', value, ...)   options below
+%   S = RUN_SESSION_V2(EXP_FOLDER, 'abandon', true)      the cell is lost: close the record (rest marked skipped)
+%
+%   Operator inputs: starting the session (break-in done, 0 pA), one key after the 30 s dark period
+%   (the holding current is set once, by hand, and never changed by the sequencer) and Ctrl-C to
+%   abort. One more physical hand-off, only when the Protocol 1 peak is too near the top or bottom edge:
+%   the arena re-aim (rotate the stage by the suggested angle, Enter, type the angle moved; or 's' to skip).
+%   Every other decision is rule-based with a defined fallback, is printed as a flag when it
+%   fires and is logged with its inputs in EXP_FOLDER/decisions.json, so the analysis can re-make it
+%   offline. There is no approval prompt. One override path exists and is never prompted for: the
+%   option 'center' ([col row] or 'p1_peak') replaces the read-out center and is logged as an override.
+%
+%   The sequence (docs/briefs/JY_PROTOCOL_HANDOVER_20261026.md and M. Reiser's decisions of 26 Oct):
+%     dark30   30 s in the dark at 0 pA right after break-in, logged (the resting Vm is on disk)
+%     p1       Protocol 1 (the pre-made grids; rows driven from the .g4p, or 'p1_mode','conductor')
+%     p1_peak  the Protocol 1 ON peak, computed by the Protocol 1 read-out (rapid_p1_peak.m), not by eye;
+%              fallback: the 12-px grid; below the floor the session stops with a flag
+%     reaim    arena re-aim check (29 Oct 2026): when the peak has less than reaim_margin_px (14) of screen
+%              above or below it, the operator is asked to rotate the stage (+/-20 deg) by the angle that
+%              puts the peak on reaim_target_row (clamped to the range), then types the angle moved; 's' skips.
+%              Otherwise nothing is asked (decision edge_check logged)
+%     p1_confirm  only after a rotation: a short Protocol 1 (the same square pattern, the squares within
+%              reaim_window_px of the predicted position, reaim_reps repeats, about 1 min); its ON peak replaces
+%              the Protocol 1 peak for everything after (decision confirm: predicted vs found); no response
+%              in the window stops the session (wrong rotation sign or cell lost; see 'reaim_reset')
+%     p2a      Protocol 2 stage 1: the five sweep blocks, 16 directions, 3 repeats (about 7.3 min)
+%     readout1 read-out call 1: placement PD (rule: mean of the 28 and 56 deg/s vectors within 10 deg,
+%              otherwise the 28 deg/s vector with a warning; > 5 deg sets a flag), the two bar sets, the
+%              stage-2 frame list and sequence; fallback when no usable PD: stage 2 plays all 88 bars
+%              and the sites are placed from the Protocol 1 peak
+%     p2b      Protocol 2 stage 2: the 22 bars at 80 ms and 14 ms, random order per repeat, 3 repeats
+%              (about 1.7 min; 'n_reps_stage2', 5 as the option), a position function on the existing
+%              88-frame bar pattern (no new pattern)
+%     readout  read-out call 2: M6 center, window, 11 sites, Prot3b and Protocol 4 tables, the figure;
+%              sanity checks (center within a few px of the Protocol 1 peak and inside the bar set, peak
+%              response above a floor, unimodal profiles when reported); on failure the center falls back
+%              to the Protocol 1 peak and the tables are shifted there, flagged
+%     build    Prot3b and Protocol 4 packages from the tables
+%     p3b      Prot3b: 26 blocks, five AO levels on AO2 (7.5 min)
+%     p4       Protocol 4: one randomized sequence with mixed flash periods (about 15 min; lattice
+%              window s -14..+18 px since 29 Oct 2026)
+%   With 'p2_mode','full' Protocol 2 runs as today (all 88 bars in one run, run_protocol2) and the
+%   read-out is called once at its end; the steps are then dark30, p1, p1_peak, reaim, p1_confirm, p2,
+%   readout, build, p3b, p4.
+%
+%   State: EXP_FOLDER/session_state.json after every step and row, session_log.txt, decisions.json.
+%   RUN_SESSION(EXP_FOLDER) after a crash or Ctrl-C continues from the first step that is not done; a step
+%   left running, failed or interrupted is re-run (its old logs are moved aside). Each protocol runs in
+%   its own package folder under EXP_FOLDER (p1/, p2a/ or p2/, p2b/, p3b/, p4/) with its own 'Log Files'
+%   and Reports/ ledgers, so the analysis sees the same per-protocol layout as before.
+%   Between steps the arena stays on the gray background (each step's cleanup), so the mean luminance does
+%   not change; when the session completes after an arena step, allOff turns the panels dark (S.out.arena_off).
+%
+%   OPTIONS (name/value or one struct):
+%     dry_run        false   SessionMockController instead of PanelsController; no G4 Host, no arena, no
+%                            Protocol 2 generation unless p2_generate_in_dry_run; files, ledgers and decisions are
+%                            written and the controller calls are logged
+%     cell, side, age, strain   metadata (cell tag such as 'JY1027'; side 'L'|'R')
+%     p2_mode        'two_stage' | 'full'
+%     steps          all     cellstr of step ids to run; others are marked 'skipped (not selected)'
+%     p1_mode        'sequencer' | 'conductor' | 'skip';  p1_package  the pre-made Protocol 1 package folder
+%     p1_folder      an existing Protocol 1 results folder (resume / conductor mode)
+%     p1_readout_fn  @(p1_folder, out_dir, pattern) -> struct(frame, xy, peak_mV, ...) of the ON peak on the
+%                    grid of PATTERN (the .mat of the 6-px, or for the fallback the 12-px, square pattern);
+%                    a two-argument function is called without the pattern. Default rapid_p1_peak.
+%     peak_frame     Protocol 1 ON peak frame (6-px grid) given by hand: an OVERRIDE, logged
+%     p2_folder      an existing Protocol 2 package (stage 1 or full), p2b_folder an existing stage-2 package
+%     p2_package_root  'C:\matlabroot\G4_Protocols\nested_RF_protocol2'  where a generated Protocol 2 package
+%                    goes (<root>\data\<yyyy_MM_dd_HH_mm>, as generate_protocol2's)
+%     p2_generate_in_dry_run  false   true: a dry run generates the stage-1 package too (needs
+%                    G4_Display_Tools on the path; point p2_package_root at a scratch folder)
+%     readout_fn     @(call, S, out_dir) producing the read-out files (call 1: <cell>_stage1.json,
+%                    <cell>_stage2_sequence.csv; call 2: <cell>_prot3b_frames.csv, _prot3b_blocks.csv,
+%                    _prot4_frames.csv, _prot4_sequence.csv, _sites.csv, _locations.json, _locations.png);
+%                    default rapid_readout(p2_folder, 'Cell', cell, 'Out', out_dir[, 'P1Peak', xy][, 'Stage2', p2b_folder]);
+%                    the JSON object sequencer_inputs (usable_pd, centroid_offset_placement_px,
+%                    center_expected_ON_80ms_peak_mV, profiles_unimodal) feeds the decisions when present
+%     readout_dir    folder that already holds those files (dry run, resume)
+%     center         [] | [col row] | 'p1_peak'   the override (never prompted for)
+%     n_reps_stage2  3;  p2_bar_flash_pattern_id  [] = the pattern whose file name holds FLASHES (as run_protocol2)
+%     thresholds: p1_peak_floor_mV 2, pd_vector_length_floor 0.1, center_max_dist_px 6, center_max_offset_px 4,
+%                 peak_floor_mV 3
+%     ao_channel 2, ai_channels [] (the Host's AI TCP stream; [] = off, nothing reads it), adc_rates_hz [0 10000 10000 0], host_config_file, pretrial_s 2,
+%     ao_zero_tail_s 0.1, dark_s 30, controller_factory, sim_speed 0, show_figures (= ~dry_run), auto_accept (= dry_run)
+%     show_status    (= show_figures)  the status window (SessionProgress): steps, estimates, clock times, the
+%                    current row and time left, the last FLAG; the time estimates are printed either way
+%     overview_plots true   after every recorded step, SESSION_STEP_OVERVIEW of its log (Vm, drift, frames,
+%                    current), shown when show_figures and saved as EXP_FOLDER/plots/<k>_<step>_overview.png
+%     analysis_plots true   after p3b and p4, ANALYZE_PROT3B / ANALYZE_P4 (src/analysis/session_plots): the
+%                    protocol's read-outs, one line in the session log, EXP_FOLDER/plots/<k>_<step>_analysis.png
+%     re-aim (steps reaim, p1_confirm):
+%       reaim            'auto' | 'off'  ('off': the edge is logged and flagged, nothing is asked)
+%       reaim_margin_px  14   px of screen needed above and below the peak's center: Protocol 2 crops its bars
+%                        and flashes to 30 px around the center (15 px each side; generate_protocol2_package
+%                        warns outside rows 16..33) and the Prot3b core sites reach 14 px (trailing site s +12
+%                        plus half a 4-px square; the +/-14 'outside' sites are mirrored when off screen). 14
+%                        keeps the 6-px grid's rows 15.5..33.5 and re-aims 9.5 / 39.5 and beyond
+%       reaim_target_row 24.5 (the screen's middle);  reaim_deg_per_px 1.25
+%       reaim_sign       +1   rows the RF moves per +1 deg on the stage scale = reaim_sign / reaim_deg_per_px
+%                        (+1: a positive rotation moves the RF DOWN the screen, toward row 48). NOT YET CONFIRMED
+%                        on the rig; the rig checklist in docs/notes/ARENA_REAIM_20261029.md determines it
+%       reaim_limit_deg  20   the stage range (+/-);  stage_angle_deg  0  the stage reading when the session starts
+%       reaim_step_deg   0.5  the suggestion is rounded to this
+%       reaim_window_px  [12 12]  [col row] half-size of the confirmation window around the predicted peak
+%       reaim_reps 2, reaim_flash_s 0.2, reaim_gray_s 0.15 (Protocol 1's timing), reaim_tolerance_px 6 (one 6-px square)
+%       reaim_reset      false  true: forget a re-aim (reaim and p1_confirm pending again, the Protocol 1 peak
+%                        restored) so it is asked again on this call; rotate the stage back first
+%     operator_answers  {}  answers taken, in order, before the keyboard for every operator prompt (tests)
+%   Each row also rewrites EXP_FOLDER/now_playing.json (package, row, pattern/function/AO IDs, duration,
+%   start time): what the arena is playing, for a display viewer.
+%
+%   Conventions: arena columns 17..192 and rows 1..48, 1-based, row 1 at the top; background 4, ON 15,
+%   OFF 0; s is positive toward the PD (the trailing / proximal side), v is + 90 deg clockwise from the
+%   PD; sides are leading (distal) / trailing (proximal).
+%
+%   Reuses the run_protocol2 call pattern and its generators (nested_RF_stimulus), the per-row controller
+%   sequence and cleanup guard of run_protocol3 (TUTL p4_experiment_design, Oct 2026), the G4 file layout
+%   of save_function_G4, and save_pattern_G4 / maDisplayTools for patterns. No existing runner is modified.
+%
+%   See also RUN_SESSION, AUTO_T4_V2, RUN_PROTOCOL2, GENERATE_PROTOCOL2, RAPID_READOUT, SESSIONMOCKCONTROLLER.
+
+opts = parse_options(varargin{:});
+exp_folder = char(exp_folder);
+if ~isfolder(exp_folder), mkdir(exp_folder); end
+state_file = fullfile(exp_folder, 'session_state.json');
+
+% ---------------------------------------------------------------- state
+if isfile(state_file)
+    S = load_state(state_file);
+    S.exp_folder = exp_folder;
+    S = merge_metadata(S, opts);
+    say(S, 'Resuming session %s (%s)', S.cell, exp_folder);
+else
+    S = new_state(exp_folder, opts);
+    say(S, 'New session %s in %s%s  [p2_mode %s]', S.cell, exp_folder, tern(opts.dry_run, ' [DRY RUN]', ''), opts.p2_mode);
+end
+S.opts = opts_for_state(opts);
+answer_queue(opts.operator_answers);
+if opts.reaim_reset, S = reaim_reset(S); end
+save_state(S, state_file);
+
+if opts.abandon
+    for k = 1:numel(S.steps)
+        if any(strcmp(S.steps(k).status, {'pending', 'running', 'interrupted', 'failed'}))
+            S.steps(k).status = 'skipped'; S.steps(k).note = 'cell lost (abandon)';
+        end
+    end
+    S.finished = iso_now();
+    save_state(S, state_file);
+    say(S, 'Session abandoned by the operator.');
+    print_checklist(S); print_decisions(S);
+    return
+end
+
+print_checklist(S, opts.steps);
+% the status window and the time estimates (SessionProgress.m); FLAG lines also go to the window
+opts.progress = SessionProgress(S, opts.show_status, opts.steps);
+active_progress(opts.progress);
+
+% ---------------------------------------------------------------- run the steps in order
+ran_arena = false;                                              % an arena step ran in this call
+k = 0;
+while k < numel(S.steps)                                        % a while loop: the re-aim gate can send it back
+    k = k + 1;
+    st = S.steps(k);
+    if ~ismember(st.id, opts.steps)
+        if strcmp(st.status, 'pending')
+            S.steps(k).status = 'skipped'; S.steps(k).note = 'not selected';
+            save_state(S, state_file);
+        end
+        continue
+    end
+    if any(strcmp(st.status, {'done', 'skipped'})), continue; end
+    if any(strcmp(st.status, {'running', 'interrupted', 'failed'}))
+        say(S, 'FLAG step %s was left "%s" (%s); re-running it.', st.id, st.status, st.note);
+        S = decide(S, st.id, 'resume', 'a step left running/failed/interrupted is re-run; its old logs are moved aside', ...
+            struct('previous_status', st.status, 'note', st.note), 'rerun', false, 'rerun');
+    end
+
+    S.steps(k).status = 'running'; S.steps(k).t_start = iso_now(); S.steps(k).note = '';
+    save_state(S, state_file);
+    say(S, '---- %d/%d  %s  (%s, about %.1f min) ----', k, numel(S.steps), st.id, st.label, st.est_min);
+    opts.progress.step_start(S, k);
+    t0 = tic;
+    try
+        switch st.id
+            case 'dark30',   S = step_dark30(S, opts);
+            case 'p1',       S = step_p1(S, opts);
+            case 'p1_peak',  S = step_p1_peak(S, opts);
+            case 'reaim',    S = step_reaim(S, opts);
+            case 'p1_confirm', S = step_p1_confirm(S, opts);
+            case 'p2',       S = step_p2_full(S, opts);
+            case 'p2a',      S = step_p2_stage1(S, opts);
+            case 'readout1', S = step_readout1(S, opts);
+            case 'p2b',      S = step_p2_stage2(S, opts);
+            case 'readout',  S = step_readout(S, opts);
+            case 'build',    S = step_build(S, opts);
+            case 'p3b',      S = step_run_package(S, opts, 'p3b');
+            case 'p4',       S = step_run_package(S, opts, 'p4');
+            otherwise, error('run_session:step', 'Unknown step %s', st.id);
+        end
+        % a step that stops the session after logging a decision returns S.stop_request (an error thrown
+        % inside the step would lose that decision from the state)
+        if isfield(S, 'stop_request')
+            msg = S.stop_request; S = rmfield(S, 'stop_request');
+            error('run_session:stop', '%s', msg);
+        end
+        % the re-aim gate asked to run again from an earlier step (S.redo_from): those steps are pending again
+        if isfield(S, 'redo_from')
+            j = find(strcmp({S.steps.id}, S.redo_from), 1); S = rmfield(S, 'redo_from');
+            for i = j:k, S.steps(i).status = 'pending'; S.steps(i).note = ''; S.steps(i).t_end = ''; end
+            save_state(S, state_file);
+            say(S, 'Running again from step %s (operator''s choice).', S.steps(j).id);
+            opts.progress.refresh(S);
+            k = j - 1;
+            continue
+        end
+    catch err
+        S.steps(k).elapsed_s = toc(t0);
+        if strcmp(err.identifier, 'run_session:skip')
+            S.steps(k).status = 'skipped'; S.steps(k).note = err.message;
+            save_state(S, state_file);
+            say(S, 'Step %s skipped: %s', st.id, err.message);
+            opts.progress.step_end(S, k);
+            continue
+        elseif strcmp(err.identifier, 'run_session:stop')
+            S.steps(k).status = 'interrupted'; S.steps(k).note = err.message;
+            save_state(S, state_file);
+            say(S, 'FLAG session stopped at %s: %s', st.id, err.message);
+            opts.progress.step_end(S, k);
+            print_checklist(S, opts.steps); print_decisions(S);
+            return
+        end
+        S.steps(k).status = 'failed'; S.steps(k).note = sprintf('%s: %s', err.identifier, err.message);
+        save_state(S, state_file);
+        say(S, 'Step %s FAILED: %s', st.id, err.message);
+        opts.progress.step_end(S, k);
+        print_checklist(S, opts.steps);
+        rethrow(err);
+    end
+    S.steps(k).elapsed_s = toc(t0);
+    S.steps(k).t_end = iso_now();
+    if strcmp(S.steps(k).status, 'running'), S.steps(k).status = 'done'; end
+    ran_arena = ran_arena || ismember(st.id, {'dark30', 'p1', 'p1_confirm', 'p2', 'p2a', 'p2b', 'p3b', 'p4'});
+    save_state(S, state_file);
+    say(S, 'Step %s done in %.1f min.', st.id, S.steps(k).elapsed_s/60);
+    opts.progress.step_end(S, k);
+    if strcmp(S.steps(k).status, 'done') && opts.overview_plots
+        S = step_overview(S, opts, k);
+        save_state(S, state_file);
+    end
+end
+
+if ran_arena, S = arena_off(S, opts); end
+S.finished = iso_now();
+save_state(S, state_file);
+print_checklist(S, opts.steps); print_decisions(S);
+say(S, 'Session complete. State: %s', state_file);
+end
+
+function S = arena_off(S, opts)
+% End of the session: the last step's cleanup left the gray background up; allOff turns the panels dark.
+% Guarded: a failure is flagged and recorded, the completed session is not failed by it.
+ctlr = opts.controller_factory();
+steps = guarded('open', @() noret(@() ctlr.open(true)));
+if steps(1).ok, steps(end+1) = guarded('allOff', @() ctlr.allOff()); end
+steps(end+1) = guarded('close', @() noret(@() ctlr.close()));
+ok = numel(steps) == 3 && all([steps.ok]);
+S.out.arena_off = struct('ok', ok, 'time', iso_now(), 'steps', steps);
+if ok
+    say(S, 'Arena off (allOff): panels dark.');
+else
+    bad = steps(~[steps.ok]);
+    say(S, 'FLAG arena not turned off (%s: %s); switch it off by hand.', bad(1).step, bad(1).detail);
+end
+end
+
+% =========================================================================================
+% options and state
+% =========================================================================================
+function o = parse_options(varargin)
+d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', '', 'strain', '', ...
+    'p2_mode', 'two_stage', 'steps', {{}}, 'p1_mode', 'sequencer', 'p1_package', '', 'p1_folder', '', ...
+    'p1_readout_fn', [], 'peak_frame', [], 'p2_folder', '', 'p2b_folder', '', 'readout_fn', [], 'readout_dir', '', ...
+    'analysis_repo', '', 'center', [], 'n_reps_stage2', 3, 'n_reps_p2', 3, 'p2_bar_flash_pattern_id', [], ...
+    'p2_package_root', 'C:\matlabroot\G4_Protocols\nested_RF_protocol2', 'p2_generate_in_dry_run', false, ...
+    'p1_peak_floor_mV', 2, 'pd_vector_length_floor', 0.1, 'center_max_dist_px', 6, 'center_max_offset_px', 4, ...
+    'peak_floor_mV', 3, 'auto_accept', [], 'show_figures', [], 'ao_channel', 2, 'ai_channels', [], ...
+    'adc_rates_hz', [0 10000 10000 0], 'host_config_file', '', 'pretrial_s', 2, 'ao_zero_tail_s', 0.1, 'dark_s', 30, ...
+    'controller_factory', [], 'sim_speed', 0, 'verbose_mock', false, 'show_status', [], 'overview_plots', true, 'analysis_plots', true, ...
+    'reaim', 'auto', 'reaim_margin_px', 14, 'reaim_target_row', 24.5, 'reaim_deg_per_px', 1.25, 'reaim_sign', 1, ...
+    'reaim_limit_deg', 20, 'stage_angle_deg', 0, 'reaim_step_deg', 0.5, 'reaim_window_px', [12 12], 'reaim_reps', 2, ...
+    'reaim_flash_s', 0.2, 'reaim_gray_s', 0.15, 'reaim_tolerance_px', 6, 'reaim_reset', false, 'operator_answers', {{}});
+if numel(varargin) == 1 && isstruct(varargin{1})
+    given = varargin{1};
+else
+    if mod(numel(varargin), 2) ~= 0, error('run_session:options', 'Options come in name/value pairs'); end
+    given = struct();
+    for k = 1:2:numel(varargin), given.(char(varargin{k})) = varargin{k+1}; end
+end
+o = d;
+for f = fieldnames(given).'
+    if ~isfield(d, f{1}), error('run_session:options', 'Unknown option %s', f{1}); end
+    o.(f{1}) = given.(f{1});
+end
+if ~ismember(o.p2_mode, {'two_stage', 'full'}), error('run_session:options', 'p2_mode must be two_stage or full'); end
+if ~ismember(o.reaim, {'auto', 'off'}), error('run_session:options', 'reaim must be auto or off'); end
+if ~ismember(o.reaim_sign, [-1 1]), error('run_session:options', 'reaim_sign must be +1 or -1'); end
+o.operator_answers = cellstr(o.operator_answers);
+if isempty(o.auto_accept), o.auto_accept = o.dry_run; end
+if isempty(o.show_figures), o.show_figures = ~o.dry_run; end
+if isempty(o.show_status), o.show_status = o.show_figures; end
+if isempty(o.steps), o.steps = step_ids(o.p2_mode); end
+o.steps = cellstr(o.steps);
+if isstring(o.cell), o.cell = char(o.cell); end
+if isstring(o.side), o.side = char(o.side); end
+if isstring(o.center), o.center = char(o.center); end
+if isempty(o.analysis_repo)
+    o.analysis_repo = fullfile(fileparts(fileparts(fileparts(fileparts(mfilename('fullpath'))))), 'ephys-standard-analysis');
+end
+if isempty(o.controller_factory)
+    if o.dry_run
+        mo = struct('sim_speed', o.sim_speed, 'verbose', o.verbose_mock);
+        o.controller_factory = @() SessionMockController(mo);
+    else
+        o.controller_factory = @() PanelsController();
+    end
+end
+end
+
+function ids = step_ids(mode)
+if nargin < 1, mode = 'two_stage'; end
+if strcmp(mode, 'full')
+    ids = {'dark30', 'p1', 'p1_peak', 'reaim', 'p1_confirm', 'p2', 'readout', 'build', 'p3b', 'p4'};
+else
+    ids = {'dark30', 'p1', 'p1_peak', 'reaim', 'p1_confirm', 'p2a', 'readout1', 'p2b', 'readout', 'build', 'p3b', 'p4'};
+end
+end
+
+function [labels, est] = step_labels(ids)
+L = struct('dark30', {{'30 s dark at 0 pA (break-in)', 0.5}}, 'p1', {{'Protocol 1 (coarse map)', 4.5}}, ...
+    'p1_peak', {{'Protocol 1 ON peak (read-out)', 0.2}}, 'reaim', {{'Arena re-aim check (edge RF: rotate)', 0.1}}, ...
+    'p1_confirm', {{'Quick Protocol 1 after the re-aim', 0.8}}, 'p2', {{'Protocol 2 (all 88 bars, as today)', 14.6}}, ...
+    'p2a', {{'Protocol 2 stage 1 (sweeps)', 7.3}}, 'readout1', {{'Read-out 1 (placement PD, bar sets)', 0.3}}, ...
+    'p2b', {{'Protocol 2 stage 2 (22 bars)', 1.7}}, 'readout', {{'Read-out 2 (center, sites, tables)', 0.5}}, ...
+    'build', {{'Build Prot3b + Protocol 4', 0.5}}, 'p3b', {{'Prot3b (26 blocks, 5 AO levels)', 7.5}}, ...
+    'p4', {{'Protocol 4 (combined map)', 15}});
+labels = cellfun(@(id) L.(id){1}, ids, 'UniformOutput', false);
+est = cellfun(@(id) L.(id){2}, ids);
+end
+
+function S = new_state(exp_folder, opts)
+ids = step_ids(opts.p2_mode);
+[labels, est] = step_labels(ids);
+steps = struct('id', ids, 'label', labels, 'status', 'pending', 't_start', '', 't_end', '', ...
+    'elapsed_s', num2cell(zeros(size(ids))), 'est_min', num2cell(est), 'note', '');
+S = struct();
+S.schema = 'run_session/2';
+S.created = iso_now();
+S.finished = '';
+S.exp_folder = exp_folder;
+S.dry_run = opts.dry_run;
+S.p2_mode = opts.p2_mode;
+S.cell = opts.cell; S.side = opts.side; S.age = opts.age; S.strain = opts.strain;
+if isempty(S.cell), S.cell = 'cell'; end
+if isempty(S.side), S.side = 'L'; end
+S.steps = steps;
+S.center_shift_px = [0 0];
+S.decisions = empty_decisions();
+S.out = struct();
+for f = [{'setup'}, ids], S.out.(f{1}) = struct(); end
+if ~isempty(opts.p1_folder), S.out.p1.folder = opts.p1_folder; end
+if ~isempty(opts.p2_folder)
+    if strcmp(opts.p2_mode, 'full'), S.out.p2.folder = opts.p2_folder; else, S.out.p2a.folder = opts.p2_folder; end
+end
+if ~isempty(opts.p2b_folder) && isfield(S.out, 'p2b'), S.out.p2b.folder = opts.p2b_folder; end
+end
+
+function S = merge_metadata(S, opts)
+for f = {'cell', 'side', 'age', 'strain'}
+    if ~isempty(opts.(f{1})), S.(f{1}) = opts.(f{1}); end
+end
+if ~isempty(opts.p1_folder), S.out.p1.folder = opts.p1_folder; end
+if ~isempty(opts.p2_folder)
+    if strcmp(S.p2_mode, 'full'), S.out.p2.folder = opts.p2_folder; else, S.out.p2a.folder = opts.p2_folder; end
+end
+if ~isempty(opts.p2b_folder) && isfield(S.out, 'p2b'), S.out.p2b.folder = opts.p2b_folder; end
+end
+
+function o = opts_for_state(opts)
+o = rmfield(opts, intersect(fieldnames(opts), {'controller_factory', 'readout_fn', 'p1_readout_fn', 'progress'}));
+end
+
+function S = load_state(f)
+S = jsondecode(fileread(f));
+if iscell(S.steps), S.steps = [S.steps{:}]; end
+for k = 1:numel(S.steps)
+    for g = {'note', 't_start', 't_end'}
+        if isempty(S.steps(k).(g{1})), S.steps(k).(g{1}) = ''; end
+    end
+end
+if ~isfield(S, 'p2_mode'), S.p2_mode = 'two_stage'; end
+if ~isfield(S, 'out') || isempty(S.out), S.out = struct(); end
+for f = [{'setup'}, step_ids(S.p2_mode)]
+    if ~isfield(S.out, f{1}) || isempty(S.out.(f{1})), S.out.(f{1}) = struct(); end
+end
+if ~isfield(S, 'decisions') || isempty(S.decisions)
+    S.decisions = empty_decisions();
+elseif iscell(S.decisions)
+    S.decisions = [S.decisions{:}];
+end
+if ~isfield(S, 'center_shift_px') || isempty(S.center_shift_px), S.center_shift_px = [0 0]; end
+S.center_shift_px = S.center_shift_px(:).';
+end
+
+function save_state(S, f)
+write_text(f, [jsonencode(S, 'PrettyPrint', true) newline]);
+end
+
+% =========================================================================================
+% the decision log: every automatic decision with its inputs, rule, outcome and fallback flag
+% =========================================================================================
+function d = empty_decisions()
+d = struct('time', {}, 'step', {}, 'decision', {}, 'rule', {}, 'inputs', {}, 'outcome', {}, 'fallback', {}, 'flags', {});
+end
+
+function S = decide(S, step, decision, rule, inputs, outcome, fallback, flags)
+if isstruct(inputs), inputs = jsonencode(inputs); end
+d = struct('time', iso_now(), 'step', step, 'decision', decision, 'rule', rule, 'inputs', char(inputs), ...
+    'outcome', char(outcome), 'fallback', logical(fallback), 'flags', char(flags));
+if isempty(S.decisions), S.decisions = d; else, S.decisions(end+1) = d; end
+write_json(fullfile(S.exp_folder, 'decisions.json'), S.decisions);
+say(S, '%sDECISION %s/%s: %s%s', tern(fallback, 'FLAG ', ''), step, decision, outcome, tern(isempty(flags), '', [' [' char(flags) ']']));
+end
+
+function print_decisions(S)
+if isempty(S.decisions), return; end
+fprintf('\n  Automatic decisions (%d; details in decisions.json):\n', numel(S.decisions));
+for k = 1:numel(S.decisions)
+    d = S.decisions(k);
+    fprintf('  %s %-8s %-16s %s%s\n', tern(d.fallback, '!', ' '), d.step, d.decision, d.outcome, tern(isempty(d.flags), '', ['  [' d.flags ']']));
+end
+fprintf('\n');
+end
+
+% =========================================================================================
+% steps
+% =========================================================================================
+function S = step_dark30(S, opts)
+% Launching run_session is the first operator input: break-in done, current clamp, 0 pA. The 30 s of
+% dark are logged. The second (and last) input follows: the holding current is set by hand once.
+if ~opts.dry_run
+    S = apply_host_config_once(S, opts);
+end
+folder = fullfile(S.exp_folder, 'dark30');
+if ~isfolder(folder), mkdir(folder); end
+say(S, 'Logging %g s of dark at 0 pA (break-in). Ctrl-C aborts.', opts.dark_s);
+ctlr = opts.controller_factory();
+ctx = containers.Map('KeyType', 'char', 'ValueType', 'any');
+ctx('ctlr') = ctlr; ctx('opened') = false; ctx('log') = false; ctx('done') = false; ctx('ao') = [];
+guard = onCleanup(@() controller_cleanup(ctx)); %#ok<NASGU>
+ctlr.open(true); ctx('opened') = true;
+checked('setRootDirectory', ctlr.setRootDirectory(folder));
+ctx('log') = true;
+checked('startLog', ctlr.startLog());
+checked('allOff', ctlr.allOff());
+t_wait = tern(opts.dry_run, opts.dark_s * opts.sim_speed, opts.dark_s);
+for s = t_wait:-5:0.01
+    fprintf('    dark: %4.0f s left\r', s); opts.progress.countdown(s, t_wait, 'dark, 0 pA'); pause(min(5, s));
+end
+fprintf('\n');
+ctx('done') = true;
+controller_cleanup(ctx);
+S.out.dark30 = struct('folder', folder, 'seconds', opts.dark_s, 'logged', true);
+say(S, 'Dark period logged in %s.', folder);
+% The one physical hand-off the sequencer cannot do: the holding current. Set once, logged, never changed.
+hold = ask(opts, 'Set the holding current now (it stays fixed for the session). Type it in pA and press Enter: ', 'not recorded');
+S.out.dark30.holding_pA = hold;
+say(S, 'Holding current recorded as "%s" pA. Protocol 1 starts.', hold);
+end
+
+function S = step_p1(S, opts)
+switch opts.p1_mode
+    case 'skip'
+        error('run_session:skip', 'p1_mode = skip');
+    case 'conductor'
+        say(S, 'Protocol 1 in the G4 Conductor (pre-made .g4p for side %s); the sequencer continues when its results folder exists.', S.side);
+        f = ask(opts, 'Protocol 1 results folder (Enter when the Conductor has finished): ', '');
+        S.out.p1 = struct('mode', 'conductor', 'folder', f, 'package_source', opts.p1_package);
+    case 'sequencer'
+        if isempty(opts.p1_package) || ~isfolder(opts.p1_package)
+            error('run_session:p1', 'p1_mode sequencer needs p1_package (the pre-made Protocol 1 package folder)');
+        end
+        pkg = fullfile(S.exp_folder, 'p1');
+        if ~isfolder(fullfile(pkg, 'Patterns')), copy_package(opts.p1_package, pkg); end
+        rows = rows_from_g4p(pkg);
+        S.steps(strcmp({S.steps.id}, 'p1')).est_min = sum([rows.duration_s]) / 60;
+        say(S, 'Protocol 1: %d rows, %.1f min programmed, from %s', numel(rows), sum([rows.duration_s])/60, opts.p1_package);
+        status = run_rows(opts, pkg, rows, [], S);
+        S.out.p1 = struct('mode', 'sequencer', 'folder', pkg, 'package_source', opts.p1_package, ...
+            'rows', numel(rows), 'state', status.state, 'log_folder', fullfile(pkg, 'Log Files'));
+    otherwise
+        error('run_session:p1', 'p1_mode must be sequencer, conductor or skip');
+end
+end
+
+function S = step_p1_peak(S, opts)
+% Decision (a): aim Protocol 2 from the Protocol 1 ON peak computed by the read-out.
+% Rule: 6-px grid ON peak when its response is >= p1_peak_floor_mV; fallback the 12-px grid peak; below
+% the floor on both grids the session stops (nothing can be aimed) unless 'peak_frame' overrides.
+out_dir = fullfile(S.exp_folder, 'readout'); if ~isfolder(out_dir), mkdir(out_dir); end
+pkg = '';
+if isfield(S.out.p1, 'package_source') && ~isempty(S.out.p1.package_source), pkg = S.out.p1.package_source; end
+if isfield(S.out.p1, 'folder') && ~isempty(S.out.p1.folder) && isfolder(fullfile(S.out.p1.folder, 'Patterns')), pkg = S.out.p1.folder; end
+% The frame is a frame of the grid that was analysed (R.grid_px, R.pattern); Protocol 2 is aimed at
+% R.aim_xy / R.aim_polarity, the median pixel of that frame of that pattern (as patt_frame_to_coord).
+p1f = ''; if isfield(S.out.p1, 'folder') && ~isempty(S.out.p1.folder), p1f = char(S.out.p1.folder); end
+[pat6, pat12] = p1_square_patterns({pkg, p1f, fileparts(p1f), fileparts(fileparts(p1f))});   % where rapid_p1_peak looks too
+R = struct('frame', [], 'xy', [], 'peak_mV', [], 'polarity', '', 'grid_px', 6, 'pattern', pat6, 'aim_xy', [], 'aim_polarity', '', ...
+    'peak_6px_mV', [], 'peak_12px_mV', [], 'source', '');
+flags = '';
+fallback = false;
+if ~isempty(opts.peak_frame)
+    R.frame = opts.peak_frame; R.source = 'override (peak_frame option, 6-px grid)';
+else
+    fn = opts.p1_readout_fn;
+    if isempty(fn) && exist('rapid_p1_peak', 'file') == 2, fn = @(f, o, pat) rapid_p1_peak(f, 'Out', o, 'Cell', S.cell, 'Figure', opts.show_figures, 'Pattern', pat); end
+    if isempty(fn)
+        error('run_session:stop', 'no Protocol 1 read-out on the path (rapid_p1_peak.m) and no peak_frame override');
+    end
+    p1_folder = ''; if isfield(S.out.p1, 'folder'), p1_folder = S.out.p1.folder; end
+    Q = call_p1_readout(fn, p1_folder, out_dir, pat6);
+    R = take_p1_fields(R, Q); R.peak_6px_mV = R.peak_mV; R.source = 'rapid_p1_peak';
+    if ~isempty(R.peak_mV) && R.peak_mV < opts.p1_peak_floor_mV
+        if isempty(pat12)
+            S = decide(S, 'p1_peak', 'aim', 'ON peak >= floor on the 6-px grid, else the 12-px grid, else stop', R, 'no usable Protocol 1 response (no 12-px grid in the package)', true, 'stop');
+            error('run_session:stop', 'Protocol 1 peak %.1f mV is below the floor %.1f mV on the 6-px grid and the package has no 12-px grid; nothing to aim at', R.peak_mV, opts.p1_peak_floor_mV);
+        end
+        Q12 = call_p1_readout(fn, p1_folder, fullfile(out_dir, 'p1_12px'), pat12);
+        R.peak_12px_mV = Q12.peak_mV;
+        if isempty(Q12.peak_mV) || Q12.peak_mV < opts.p1_peak_floor_mV
+            S = decide(S, 'p1_peak', 'aim', 'ON peak >= floor on the 6-px grid, else the 12-px grid, else stop', R, 'no usable Protocol 1 response', true, 'stop');
+            error('run_session:stop', 'Protocol 1 peak is below the floor %.1f mV on both grids (6 px %.1f, 12 px %.1f mV); nothing to aim at', opts.p1_peak_floor_mV, R.peak_mV, Q12.peak_mV);
+        end
+        flags = sprintf('6-px peak %.1f mV < floor %.1f; using the 12-px grid peak (%.1f mV)', R.peak_mV, opts.p1_peak_floor_mV, Q12.peak_mV);
+        R = take_p1_fields(R, Q12); R.grid_px = 12; R.pattern = pat12; R.source = 'rapid_p1_peak (12-px grid)'; fallback = true;
+    end
+end
+if isempty(R.frame) || ~isfinite(R.frame) || R.frame ~= round(R.frame) || R.frame < 2
+    error('run_session:stop', 'no valid Protocol 1 peak frame (got %s)', mat2str(R.frame));
+end
+if ~isempty(R.pattern)
+    [R.aim_xy, R.aim_polarity] = frame_to_xy(R.pattern, R.frame);
+    if isempty(R.xy), R.xy = R.aim_xy; end
+    if isempty(R.polarity), R.polarity = R.aim_polarity; end
+elseif R.grid_px ~= 6
+    error('run_session:stop', 'the %d-px grid peak cannot be aimed without its pattern', R.grid_px);
+end
+S.out.p1_peak = R;
+S = decide(S, 'p1_peak', 'aim', 'ON peak >= floor on the 6-px grid, else the 12-px grid, else stop', R, ...
+    sprintf('frame %d of the %d-px grid at col/row %s (%s)', R.frame, R.grid_px, mat2str(R.xy, 4), R.source), fallback, flags);
+end
+
+function S = step_reaim(S, opts)
+% The arena re-aim (29 Oct 2026). Protocol 2 and Prot3b need about reaim_margin_px of screen above and below
+% the center; the stage tilts the arena (+/- reaim_limit_deg, 1 px = reaim_deg_per_px deg), so an RF near the
+% top or bottom edge can be brought back toward the middle instead of losing the cell. Rule: room = px of
+% screen above / below the Protocol 1 peak's center (row r: r - 0.5 above, 48.5 - r below); room below the
+% margin on either side -> the operator rotates the stage by the angle that moves the peak to
+% reaim_target_row, clamped to the stage range and rounded to reaim_step_deg; p1_confirm then measures it.
+i_conf = strcmp({S.steps.id}, 'p1_confirm');
+S.out.reaim = struct('needed', false, 'done', false);
+pk = S.out.p1_peak;
+xy = double(getf(pk, 'aim_xy', getf(pk, 'xy', [])));
+if numel(xy) ~= 2, error('run_session:skip', 'no Protocol 1 peak position to check'); end
+xy = xy(:).';
+room = [xy(2) - 0.5, 48.5 - xy(2)];
+m = opts.reaim_margin_px;
+rule = sprintf(['re-aim when the Protocol 1 peak has less than reaim_margin_px = %g px of screen above or below its center ' ...
+    '(Protocol 2 crops to 30 px around the center; the Prot3b core sites reach 14 px)'], m);
+in = struct('peak_xy', xy, 'grid_px', getf(pk, 'grid_px', 6), 'room_top_px', room(1), 'room_bottom_px', room(2), ...
+    'margin_px', m, 'reaim', opts.reaim);
+S.out.reaim.peak_xy = xy; S.out.reaim.room_px = room;
+if all(room >= m)
+    if any(i_conf), S.steps(i_conf).est_min = 0; end
+    S = decide(S, 'reaim', 'edge_check', rule, in, sprintf('no re-aim: %g px above and %g px below the peak (>= %g)', room(1), room(2), m), false, '');
+    return
+end
+S.out.reaim.needed = true;
+[~, ie] = min(room); edges = {'top', 'bottom'}; edge = edges{ie};
+S.out.reaim.edge = edge;
+if strcmp(opts.reaim, 'off')
+    S = decide(S, 'reaim', 'edge_check', rule, in, sprintf('peak %g px from the %s edge (< %g) but reaim = off: the session goes on at the edge', room(ie), edge, m), true, 'reaim_off');
+    return
+end
+S = decide(S, 'reaim', 'edge_check', rule, in, sprintf('RE-AIM: peak %g px from the %s edge (< %g)', room(ie), edge, m), false, ['edge_' edge]);
+
+% the suggestion: the rotation that moves the peak's row to reaim_target_row, inside the stage range
+lim = opts.reaim_limit_deg; now = getf(S.out, 'stage_now_deg', opts.stage_angle_deg); st = opts.reaim_step_deg;   % stage_now_deg: after an earlier re-aim of this cell
+shift_px = opts.reaim_target_row - xy(2);                            % + = the RF should move down the screen
+wanted = opts.reaim_sign * shift_px * opts.reaim_deg_per_px;
+target = min(max(now + wanted, -lim), lim);
+sugg = fix((target - now) / st) * st;                                % rounded toward 0: never past the range
+clamped = abs(now + wanted) > lim;
+row_after = @(deg) xy(2) + opts.reaim_sign * deg / opts.reaim_deg_per_px;
+rot = struct('peak_xy', xy, 'edge', edge, 'wanted_deg', wanted, 'suggested_deg', sugg, 'clamped', clamped, ...
+    'stage_before_deg', now, 'limit_deg', lim, 'sign', opts.reaim_sign, 'deg_per_px', opts.reaim_deg_per_px, 'target_row', opts.reaim_target_row);
+rrule = ['suggested = reaim_sign * (reaim_target_row - peak row) * reaim_deg_per_px, clamped to +/- reaim_limit_deg on the stage scale ' ...
+    '(from stage_angle_deg) and rounded to reaim_step_deg; predicted row = peak row + reaim_sign * actual / reaim_deg_per_px'];
+if sugg == 0
+    S.out.reaim = merge(S.out.reaim, rot);
+    S = decide(S, 'reaim', 'rotation', rrule, rot, sprintf('no rotation possible: the stage is at %+g deg, the limit is +/-%g', now, lim), true, 'stage_at_limit');
+    return
+end
+dir_txt = tern(opts.reaim_sign * sugg > 0, 'DOWN (toward row 48)', 'UP (toward row 1)');
+fprintf(['\n  ============================== RE-AIM THE ARENA ==============================\n' ...
+    '  Protocol 1 peak at col %g, row %g: %g px from the %s edge; Protocol 2 and Prot3b need %g px.\n' ...
+    '  Rotate the stage by %+g deg (from %+g to %+g deg on its scale)%s.\n' ...
+    '  Expected: the RF moves %.1f px %s, to row %.1f (reaim_sign %+d).\n' ...
+    '  ==============================================================================\n'], ...
+    xy(1), xy(2), room(ie), edge, m, sugg, now, now + sugg, tern(clamped, sprintf(' - CLAMPED, %+.1f deg would center it', wanted), ''), ...
+    abs(row_after(sugg) - xy(2)), dir_txt, row_after(sugg), opts.reaim_sign);
+opts.progress.note(sprintf('RE-AIM: rotate the stage by %+g deg, then Enter in the command window', sugg));
+a = ask(opts, 'Press Enter when the stage is moved, or type s and Enter to skip the re-aim: ', '');
+actual = 0;
+if ~strcmpi(strtrim(a), 's')
+    actual = NaN;
+    for k = 1:3
+        r = ask(opts, sprintf('Angle actually moved, in deg [%+g]: ', sugg), sprintf('%g', sugg));
+        actual = str2double(r);
+        if isfinite(actual), break; end
+        say(S, 'Not a number: "%s"', r);
+    end
+    if ~isfinite(actual), error('run_session:stop', 're-aim: no valid angle typed; resume to be asked again'); end
+end
+rot.actual_deg = actual; rot.stage_after_deg = now + actual;
+if actual == 0
+    rot.skipped = true;
+    S.out.reaim = merge(S.out.reaim, rot);
+    S = decide(S, 'reaim', 'rotation', rrule, rot, sprintf('SKIPPED by the operator (suggested %+g deg): the session goes on at the edge peak', sugg), true, 'operator_skip');
+    return
+end
+rot.skipped = false;
+rot.predicted_xy = [xy(1), row_after(actual)];
+flags = {};
+if clamped, flags{end+1} = sprintf('clamped to the stage range (%+.1f deg wanted)', wanted); end
+if abs(actual - sugg) > st/2, flags{end+1} = sprintf('moved %+g deg, suggested %+g', actual, sugg); end
+if abs(now + actual) > lim + 1e-9, flags{end+1} = sprintf('stage now at %+g deg, beyond +/-%g', now + actual, lim); end
+S.out.reaim = merge(S.out.reaim, rot); S.out.reaim.done = true;
+S = decide(S, 'reaim', 'rotation', rrule, rot, sprintf('suggested %+g deg, moved %+g deg (stage %+g -> %+g); peak predicted at col/row %s', ...
+    sugg, actual, now, now + actual, mat2str(rot.predicted_xy, 4)), false, strjoin(flags, '; '));
+end
+
+function S = step_p1_confirm(S, opts)
+% After a rotation: a short Protocol 1 over the squares of the same pattern within reaim_window_px of the
+% predicted peak, reaim_reps repeats, then its ON peak. Decision confirm: found within reaim_tolerance_px
+% (rows) of the prediction and not on the window's edge -> good; otherwise flagged; the found peak replaces
+% the Protocol 1 peak either way (it is measured after the move). Below p1_peak_floor_mV -> stop.
+if ~isfield(S.out, 'reaim') || ~getf(S.out.reaim, 'done', false), error('run_session:skip', 'no re-aim'); end
+A = S.out.reaim; pk = S.out.p1_peak;
+pred = double(A.predicted_xy(:).');
+pat = char(getf(pk, 'pattern', ''));
+if isempty(pat) || ~isfile(pat), error('run_session:stop', 're-aim confirmation: the Protocol 1 square pattern is not known (%s)', pat); end
+pkg = fullfile(S.exp_folder, 'p1_confirm');
+B = build_p1_confirm_package(pat, pred, pkg, opts, S.cell);
+rows = rows_from_package(pkg);
+S.steps(strcmp({S.steps.id}, 'p1_confirm')).est_min = B.programmed_s / 60;
+say(S, 'Re-aim confirmation: %d squares (%d flashes per repeat) within %s px of col/row %s, %d repeats, %.1f min.', ...
+    B.n_positions, numel(B.frames), mat2str(opts.reaim_window_px), mat2str(pred, 4), opts.reaim_reps, B.programmed_s/60);
+status = run_rows(opts, pkg, rows, [], S);
+S.out.p1_confirm = struct('folder', pkg, 'rows', numel(rows), 'state', status.state, 'log_folder', fullfile(pkg, 'Log Files'), ...
+    'pattern', B.pattern, 'n_positions', B.n_positions, 'window', B.window, 'predicted_xy', pred);
+save_state(S, fullfile(S.exp_folder, 'session_state.json'));
+
+out_dir = fullfile(S.exp_folder, 'readout', 'p1_confirm'); if ~isfolder(out_dir), mkdir(out_dir); end
+fn = opts.p1_readout_fn;
+if isempty(fn) && opts.dry_run
+    % no log in a dry run: take the window's ON square nearest the prediction
+    on = B.on_frames; [~, j] = min(hypot(B.cx(on) - pred(1), B.cy(on) - pred(2)));
+    Q = struct('frame', on(j), 'xy', [], 'peak_mV', NaN); src = 'dry run: no log, the square nearest the prediction';
+else
+    if isempty(fn) && exist('rapid_p1_peak', 'file') == 2, fn = @(f, o, p) rapid_p1_peak(f, 'Out', o, 'Cell', S.cell, 'Figure', opts.show_figures, 'Pattern', p); end
+    if isempty(fn), error('run_session:stop', 'no Protocol 1 read-out on the path (rapid_p1_peak.m) for the re-aim confirmation'); end
+    Q = call_p1_readout(fn, pkg, out_dir, B.pattern); src = 'rapid_p1_peak (re-aim window)';
+end
+fr = getf(Q, 'frame', []); mv = getf(Q, 'peak_mV', NaN);
+in = struct('predicted_xy', pred, 'frame', fr, 'peak_mV', mv, 'floor_mV', opts.p1_peak_floor_mV, 'tolerance_px', opts.reaim_tolerance_px, ...
+    'window', B.window, 'rotation_deg', A.actual_deg, 'sign', A.sign, 'before_xy', A.peak_xy, 'before_peak_mV', getf(pk, 'peak_mV', NaN));
+crule = sprintf(['ON peak of the confirmation >= p1_peak_floor_mV (else stop); good when its row is within reaim_tolerance_px = %g of the ' ...
+    'prediction and it is not on the window''s outer row or column; the found peak replaces the Protocol 1 peak'], opts.reaim_tolerance_px);
+if isempty(fr) || ~ismember(fr, B.frames) || (isfinite(mv) && mv < opts.p1_peak_floor_mV)
+    S = decide(S, 'p1_confirm', 'confirm', crule, in, sprintf('NO response in the re-aim window (peak %s mV, frame %s)', num2str(mv), mat2str(fr)), true, 'reaim_no_response');
+    S.stop_request = sprintf(['no response above %g mV in the re-aim window around col/row %s. Wrong rotation direction (reaim_sign) or the cell is lost. ' ...
+        'Rotate the stage back to %+g deg and resume with ''reaim_reset'', true (and ''reaim_sign'', %d if the direction was wrong)'], ...
+        opts.p1_peak_floor_mV, mat2str(pred, 4), A.stage_before_deg, -A.sign);
+    return
+end
+[nxy, pol] = frame_to_xy(B.pattern, fr);
+d = nxy - pred;
+on_edge = nxy(1) <= min(B.cx(B.on_frames)) || nxy(1) >= max(B.cx(B.on_frames)) || nxy(2) <= min(B.cy(B.on_frames)) || nxy(2) >= max(B.cy(B.on_frames));
+room = [nxy(2) - 0.5, 48.5 - nxy(2)];
+moved = nxy(2) - A.peak_xy(2); expected = pred(2) - A.peak_xy(2);
+flags = {};
+if abs(d(2)) > opts.reaim_tolerance_px, flags{end+1} = sprintf('moved %+.1f rows, predicted %+.1f (check reaim_deg_per_px / reaim_sign)', moved, expected); end
+if on_edge, flags{end+1} = 'peak on the window''s edge: the RF may lie beyond it'; end
+if any(room < opts.reaim_margin_px), flags{end+1} = sprintf('still near the edge (%g / %g px above / below)', room(1), room(2)); end
+if sign(moved) ~= sign(expected) && moved ~= 0, flags{end+1} = 'moved the OPPOSITE way to the prediction: reaim_sign is wrong'; end
+good = isempty(flags);
+if ~opts.dry_run || ~isempty(opts.p1_readout_fn), say(S, 'Re-aim confirmation peak: frame %d at col/row %s, %.1f mV (before the move: %.1f mV).', fr, mat2str(nxy, 4), mv, getf(pk, 'peak_mV', NaN)); end
+before = pk; if isfield(before, 'before_reaim'), before = rmfield(before, 'before_reaim'); end
+if ~isfield(S.out, 'reaim_first_peak') || isempty(S.out.reaim_first_peak), S.out.reaim_first_peak = before; end
+new = pk;
+new.frame = fr; new.aim_xy = nxy; new.aim_polarity = pol; new.peak_mV = mv;
+qx = getf(Q, 'xy', []); if numel(qx) == 2, new.xy = double(qx(:).'); else, new.xy = nxy; end
+new.polarity = pol; new.pattern = B.pattern; new.source = src; new.before_reaim = S.out.reaim_first_peak; new.reaim_deg = A.actual_deg;
+S.out.p1_peak = new;
+S.out.p1_confirm.found_xy = nxy; S.out.p1_confirm.offset_px = d; S.out.p1_confirm.good = good;
+in.found_xy = nxy; in.offset_px = d; in.on_window_edge = on_edge; in.room_px = room;
+verdict = tern(good, 'GOOD', 'CHECK');
+S = decide(S, 'p1_confirm', 'confirm', crule, in, sprintf('%s: found col/row %s, predicted %s (row offset %+.1f px); Protocol 2 is aimed there', ...
+    verdict, mat2str(nxy, 4), mat2str(pred, 4), d(2)), ~good, strjoin(flags, '; '));
+
+% the operator sees the confirmation map (predicted vs found) and confirms before Protocol 2
+png = plot_reaim_confirm(S, opts, B, Q, A, pred, nxy, verdict);
+S.out.p1_confirm.png = png;
+if ~isempty(png), say(S, 'Re-aim confirmation figure: %s', png); end
+still_near = any(room < opts.reaim_margin_px);
+fprintf(['\n  Re-aim %s: found col/row %s (predicted %s)%s.\n' ...
+    '    Enter  continue: Protocol 2 aimed at the found peak\n' ...
+    '    c      repeat the check (the same window, the stage where it is)\n' ...
+    '%s' ...
+    '    s      stop the session here\n'], verdict, mat2str(nxy, 4), mat2str(pred, 4), tern(isempty(flags), '', [' - ' strjoin(flags, '; ')]), ...
+    tern(still_near, sprintf('    a      re-aim again from the found peak (the stage now at %+g deg)\n', A.stage_after_deg), ''));
+valid = {'', 'c', 's'}; if still_near, valid{end+1} = 'a'; end
+r = 'x';
+for k = 1:5
+    r = lower(strtrim(ask(opts, 'Your choice: ', '')));
+    if ismember(r, valid), break; end
+    say(S, 'Not one of the choices: "%s"', r);
+end
+if ~ismember(r, valid), r = 's'; end
+grule = 'the operator, after the confirmation figure: Enter continue, c repeat the check, a re-aim again (when still near the edge), s stop';
+gin = struct('choice', r, 'verdict', verdict, 'found_xy', nxy, 'stage_deg', A.stage_after_deg);
+switch r
+    case ''
+        S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('continue: Protocol 2 aimed at col/row %s', mat2str(nxy, 4)), false, '');
+    case 'c'
+        S.out.p1_peak = pk;
+        S = decide(S, 'p1_confirm', 'gate', grule, gin, 'repeat the check', false, 'operator_repeat');
+        S.redo_from = 'p1_confirm';
+    case 'a'
+        S.out.stage_now_deg = A.stage_after_deg;
+        S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('re-aim again from col/row %s (stage at %+g deg)', mat2str(nxy, 4), A.stage_after_deg), false, 'operator_reaim_again');
+        S.redo_from = 'reaim';
+    case 's'
+        S = decide(S, 'p1_confirm', 'gate', grule, gin, 'stopped by the operator after the re-aim confirmation', true, 'operator_stop');
+        S.out.p1_peak = pk;
+        S.stop_request = sprintf(['stopped by the operator after the re-aim confirmation. The same command resumes (the check runs again, then ' ...
+            'this choice); to redo the re-aim from the start, rotate the stage back to %+g deg and add ''reaim_reset'', true'], ...
+            getf(S.out.reaim, 'stage_before_deg', 0));
+end
+end
+
+function png = plot_reaim_confirm(S, opts, B, Q, A, pred, nxy, verdict)
+% The confirmation map on the arena: the ON dV of each square of the window (when the read-out gives its
+% map rows), the window, the Protocol 1 peak before the move, the predicted and the found peak, the margin
+% lines. Saved as EXP_FOLDER/plots/p1_confirm_reaim.png; shown when show_figures. Never stops the session.
+png = '';
+try
+    d = fullfile(S.exp_folder, 'plots'); if ~isfolder(d), mkdir(d); end
+    png = fullfile(d, sprintf('p1_confirm_reaim_%s.png', char(datetime('now', 'Format', 'HHmmss'))));
+    vis = opts.show_figures && usejava('desktop');
+    fig = figure('Visible', tern(vis, 'on', 'off'), 'Name', 'Re-aim confirmation', 'NumberTitle', 'off', 'Color', 'w', 'Position', [80 80 1000 360]);
+    ax = axes(fig); hold(ax, 'on'); set(ax, 'YDir', 'reverse'); axis(ax, 'equal'); xlim(ax, [16.5 192.5]); ylim(ax, [0.5 48.5]);
+    rows = getf(Q, 'rows', []); g = getf(S.out.p1_peak, 'grid_px', 6);
+    if isstruct(rows) && isfield(rows, 'dV_mean_mV')
+        r = rows(strcmp({rows.polarity}, 'ON')); v = [r.dV_mean_mV]; cm = parula(256); lo = min(v); hi = max(v); if hi <= lo, hi = lo + 1; end
+        for i = 1:numel(r)
+            c = cm(1 + round((v(i) - lo) / (hi - lo) * 255), :);
+            rectangle(ax, 'Position', [r(i).x_center_1based - g/2, r(i).y_center_1based - g/2, g, g], 'FaceColor', c, 'EdgeColor', 'none');
+        end
+        colormap(ax, cm); clim(ax, [lo hi]); cb = colorbar(ax); cb.Label.String = 'ON \DeltaV (mV)';
+    end
+    rectangle(ax, 'Position', [16.5 0.5 176 48], 'EdgeColor', [0.4 0.4 0.4]);
+    m = opts.reaim_margin_px;
+    plot(ax, [16.5 192.5], [0.5 + m, 0.5 + m], ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+    plot(ax, [16.5 192.5], [48.5 - m, 48.5 - m], ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+    w = B.window; rectangle(ax, 'Position', [w.col(1), w.row(1), diff(w.col), diff(w.row)], 'LineStyle', '--', 'EdgeColor', 'k');
+    b = double(A.peak_xy(:).');
+    h(1) = plot(ax, b(1), b(2), 's', 'MarkerSize', 10, 'LineWidth', 1.5, 'Color', [0.5 0.5 0.5]);
+    h(2) = plot(ax, pred(1), pred(2), 'x', 'MarkerSize', 12, 'LineWidth', 2, 'Color', [0.85 0.1 0.1]);
+    h(3) = plot(ax, nxy(1), nxy(2), 'o', 'MarkerSize', 12, 'LineWidth', 2, 'Color', tern(strcmp(verdict, 'GOOD'), [0 0.6 0], [0.9 0.5 0]));
+    legend(ax, h, {'Protocol 1 peak before the move', 'predicted', 'found'}, 'Location', 'eastoutside');
+    xlabel(ax, 'column'); ylabel(ax, 'row (1 = top)');
+    title(ax, sprintf('%s re-aim %+g deg: %s - found [%g %g], predicted [%.1f %.1f]; dotted: %g-px margin', S.cell, A.actual_deg, verdict, nxy, pred, m), 'Interpreter', 'none');
+    exportgraphics(fig, png, 'Resolution', 110);
+    if ~vis, close(fig); else, drawnow; end
+catch err
+    say(S, 'FLAG re-aim confirmation figure failed: %s', err.message); png = '';
+end
+end
+
+function B = build_p1_confirm_package(pattern_file, pred, out_dir, opts, tag)
+% p1_confirm/: the Protocol 1 square pattern copied as pattern 1 (same frames, so the frame numbers and
+% rapid_p1_peak work as on Protocol 1; it never edits the Protocol 1 package), its ON and OFF squares whose
+% center lies within reaim_window_px of PRED, Protocol 1's flash and gray durations, one position function
+% per repeat (1 s gray, then the squares in a random order, seeded from the cell tag), 2 s gray pretrial
+% and posttrial.
+q = load(pattern_file); Pats = q.pattern.Pats; n_frames = size(Pats, 3);
+cx = nan(1, n_frames); cy = nan(1, n_frames); is_on = false(1, n_frames);
+bkg = mode(reshape(Pats(:, :, 1), 1, []));
+for f = 2:n_frames
+    [r, c] = find(Pats(:, :, f) ~= bkg);
+    if isempty(r), continue; end
+    cx(f) = median(c); cy(f) = median(r); is_on(f) = max(reshape(Pats(:, :, f), 1, [])) > bkg;
+end
+w = opts.reaim_window_px; if isscalar(w), w = [w w]; end
+sel = abs(cx - pred(1)) <= w(1) & abs(cy - pred(2)) <= w(2);
+frames = find(sel);
+if ~any(sel & is_on), error('run_session:stop', 're-aim confirmation: no square of %s within %s px of col/row %s', pattern_file, mat2str(w), mat2str(pred, 4)); end
+[src_dir, nm] = fileparts(pattern_file);
+if ~isempty(regexp(nm, '^\d{4}_', 'once')), stem = ['0001_' nm(6:end)]; src_id = str2double(nm(1:4)); else, stem = ['0001_' nm]; src_id = NaN; end
+dirs = new_package_dir(out_dir);
+copyfile(pattern_file, fullfile(dirs.pat, [stem '.mat']));
+pat_bin = fullfile(src_dir, sprintf('pat%04d.pat', src_id));
+if isfile(pat_bin), copyfile(pat_bin, fullfile(dirs.pat, 'pat0001.pat'));
+elseif ~opts.dry_run, error('run_session:stop', 're-aim confirmation: %s not found next to the pattern', pat_bin); end
+pfn(1) = write_function(pfn_sections(opts.pretrial_s, 1, [], [], [], n_frames), 'pfn', 1, dirs.fn, sprintf('gray_%gs', opts.pretrial_s), n_frames);
+rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
+rows(1) = row('pretrial', 1, 1, 0, opts.pretrial_s);
+rng(uint32(mod(sum(double(tag)) * 104729, 2^31)), 'twister');
+eh = {'repeat', 'order', 'pattern_frame', 'polarity', 'square_center_x', 'square_center_y', 'flash_onset_s', 'flash_onset_programmed_s'};
+er = {}; t = opts.pretrial_s; settle_s = 1;
+for r = 1:opts.reaim_reps
+    order = frames(randperm(numel(frames)));
+    func = pfn_sections(settle_s, 1, order, opts.reaim_flash_s, opts.reaim_gray_s, n_frames);
+    func = [func, ones(1, mod(-numel(func), 50))];              % whole deciseconds (500 Hz)
+    dur = r6(numel(func) / 500);
+    pfn(1+r) = write_function(func, 'pfn', 1+r, dirs.fn, sprintf('reaim_%dsquares_%gms_%gms_rep%d', numel(order), opts.reaim_flash_s*1000, opts.reaim_gray_s*1000, r), n_frames); %#ok<AGROW>
+    rows(end+1) = row(sprintf('re-aim rep %d (%d flashes)', r, numel(order)), 1, 1+r, 0, dur); %#ok<AGROW>
+    for e = 1:numel(order)
+        on = settle_s + (e-1) * (opts.reaim_flash_s + opts.reaim_gray_s);
+        er(end+1, :) = {r, e, order(e), tern(is_on(order(e)), 'ON', 'OFF'), cx(order(e)), cy(order(e)), r6(on), r6(t + on)}; %#ok<AGROW>
+    end
+    t = t + dur;
+end
+rows(end+1) = row('posttrial', 1, 1, 0, opts.pretrial_s);
+programmed = sum([rows.duration_s]);
+pat = struct('id', 1, 'stem', stem, 'x_num', n_frames, 'y_num', 1, 'gs_val', 4, 'arena_pitch', 0);
+write_current_exp(out_dir, pat, pfn, []);
+write_json(fullfile(dirs.rep, 'rows.json'), struct('rows', rows, 'cleanup', struct('pattern_id', 1, 'gray_pfn_id', 1, 'zero_afn_id', 0), 'programmed_s', programmed));
+write_csv(fullfile(dirs.rep, 'event_ledger.csv'), eh, er);
+win = struct('col', [pred(1) - w(1), pred(1) + w(1)], 'row', [pred(2) - w(2), pred(2) + w(2)]);
+write_json(fullfile(dirs.rep, 'config.json'), struct('schema', 'run_session/2', 'protocol', 'Protocol 1 re-aim confirmation', 'cell', tag, ...
+    'generated', iso_now(), 'pattern_from', pattern_file, 'predicted_xy', pred, 'window', win, 'frames', frames, 'repeats', opts.reaim_reps, ...
+    'flash_s', opts.reaim_flash_s, 'gray_s', opts.reaim_gray_s, 'settle_s', settle_s, 'programmed_duration_s', programmed));
+B = struct('folder', out_dir, 'pattern', fullfile(dirs.pat, [stem '.mat']), 'frames', frames, 'on_frames', frames(is_on(frames)), ...
+    'n_positions', sum(is_on(frames)), 'cx', cx, 'cy', cy, 'window', win, 'programmed_s', programmed);
+end
+
+function S = reaim_reset(S)
+% 'reaim_reset': forget a re-aim so that it is asked again (after the stage was rotated back).
+i = ismember({S.steps.id}, {'reaim', 'p1_confirm'});
+if ~any(i), return; end
+pk = S.out.p1_peak; restored = isstruct(pk) && isfield(pk, 'before_reaim');
+if isfield(S.out, 'reaim_first_peak') && ~isempty(S.out.reaim_first_peak), S.out.p1_peak = S.out.reaim_first_peak; restored = true;
+elseif restored, S.out.p1_peak = pk.before_reaim; end
+for k = find(i), S.steps(k).status = 'pending'; S.steps(k).note = ''; end
+S.out.reaim = struct(); S.out.p1_confirm = struct();
+for f = {'reaim_first_peak', 'stage_now_deg'}, if isfield(S.out, f{1}), S.out = rmfield(S.out, f{1}); end, end
+ran = any(strcmp({S.steps(find(i, 1, 'last') + 1:end).status}, 'done'));
+S = decide(S, 'reaim', 'reset', 'reaim_reset: reaim and p1_confirm pending again, the Protocol 1 peak restored from before the re-aim', ...
+    struct('restored_p1_peak', restored), 'the re-aim will be asked again', ran, tern(ran, 'later steps already ran with the re-aimed peak', ''));
+end
+
+function s = merge(s, t)
+for f = fieldnames(t).', s.(f{1}) = t.(f{1}); end
+end
+
+function S = step_p2_full(S, opts)
+% Protocol 2 as today: all 88 bars in one run (run_protocol2), one read-out at the end.
+if isfield(S.out.p2, 'folder') && ~isempty(S.out.p2.folder) && isfolder(S.out.p2.folder)
+    say(S, 'Protocol 2 folder given: %s', S.out.p2.folder); S.out.p2.mode = 'given'; return
+end
+if opts.dry_run
+    S.out.p2 = dry_p2_placeholder(S, 'p2', 'full: generate_protocol2_package + run_protocol2 (all 88 bars)');
+    return
+end
+[folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root);
+S.out.p2 = struct('folder', folder, 'mode', 'run_protocol2', 'peak_frame', S.out.p1_peak.frame, 'n_reps', opts.n_reps_p2);
+save_state(S, fullfile(S.exp_folder, 'session_state.json'));
+say(S, 'Protocol 2 generated in %s; running (%d reps, all 88 bars).', folder, opts.n_reps_p2);
+run_protocol2(folder, pattern_order, func_order, trial_dur, opts.n_reps_p2);   % as today; converts TDMS at the end
+end
+
+function S = step_p2_stage1(S, opts)
+% Stage 1: the package is generated as today, but only the sweep conditions are run (every condition
+% whose pattern is not the bar-flash pattern, the one named FLASHES), n_reps_p2 repeats.
+if isfield(S.out.p2a, 'folder') && ~isempty(S.out.p2a.folder) && isfolder(S.out.p2a.folder) && ...
+        isfield(S.out.p2a, 'state') && strcmp(S.out.p2a.state, 'completed')
+    say(S, 'Stage 1 already completed in %s', S.out.p2a.folder); return
+end
+if isfield(S.out.p2a, 'folder') && ~isempty(S.out.p2a.folder) && isfolder(fullfile(S.out.p2a.folder, 'Patterns'))
+    folder = S.out.p2a.folder; given = true;
+elseif opts.dry_run && ~opts.p2_generate_in_dry_run
+    S.out.p2a = dry_p2_placeholder(S, 'p2a', 'stage 1: generate_protocol2_package, then the sweep rows x n_reps');
+    return
+else
+    folder = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root); given = false;
+    say(S, 'Protocol 2 package generated for peak frame %d (%d-px grid, aimed at col/row %s): %s', S.out.p1_peak.frame, getf(S.out.p1_peak, 'grid_px', 6), ...
+        mat2str(getf(S.out.p1_peak, 'aim_xy', [])), folder);
+end
+P = p2_plan(folder, opts);
+for w = P.warnings, say(S, 'FLAG %s', w{1}); end
+rows = P.stage1_rows;
+S.steps(strcmp({S.steps.id}, 'p2a')).est_min = sum([rows.duration_s]) / 60;
+say(S, 'Protocol 2 stage 1: %d sweep rows x %d reps = %d rows, %.1f min (bar-flash pattern %s left for stage 2).', ...
+    numel(P.stage1_idx), P.n_reps, numel(rows), sum([rows.duration_s])/60, mat2str(P.bar_flash_patterns));
+status = run_rows(opts, folder, rows, [], S);
+S.out.p2a = struct('folder', folder, 'mode', tern(given, 'given package, stage-1 rows', 'generated, stage-1 rows'), ...
+    'peak_frame', S.out.p1_peak.frame, 'n_reps', P.n_reps, 'rows', numel(rows), 'state', status.state, ...
+    'bar_flash_patterns', P.bar_flash_patterns, 'log_folder', fullfile(folder, 'Log Files'));
+end
+
+function S = step_readout1(S, opts)
+% Read-out call 1 on the stage-1 session: placement PD, the two bar sets, the stage-2 frame list and
+% sequence. Decision (b): the placement-PD rule lives in the read-out; the sequencer displays its
+% outcome and flag. Decision (d): no usable PD -> stage 2 plays all 88 bars and the sites are placed
+% from the Protocol 1 peak.
+out_dir = fullfile(S.exp_folder, 'readout'); if ~isfolder(out_dir), mkdir(out_dir); end
+tag = S.cell;
+method = call_readout(1, S, opts, out_dir);
+% rapid_readout.m draws the tuning figure itself (and writes <cell>_stage1.png); other methods: show the PNG if any
+if ~strcmp(method, 'rapid_readout.m'), show_readout_figure(opts, fullfile(out_dir, [tag '_stage1.png'])); end
+js = fullfile(out_dir, [tag '_stage1.json']); seq = fullfile(out_dir, [tag '_stage2_sequence.csv']);
+if ~isfile(js), error('run_session:readout', 'Read-out call 1 did not write %s', js); end
+J = jsondecode(fileread(js));
+P = getf(J, 'placement', struct());
+pdinfo = struct('pd_deg', getf(J, 'pd_deg', []), 'pd_vector_28', getf(J, 'pd_vector_28', []), 'pd_vector_56', getf(J, 'pd_vector_56', []), ...
+    'pd_placement', getf(J, 'pd_placement', []), 'pd_rule', getf(J, 'pd_rule', ''), 'pd_flag_gt5', getf(J, 'pd_flag_gt5', false), ...
+    'agree', getf(P, 'agree', []), 'diff_28_56_deg', getf(P, 'diff_28_56_deg', []), 'vector_length_28', getf(P, 'vector_length_28', []), ...
+    'vector_length_56', getf(P, 'vector_length_56', []), 'margin_to_lut_boundary_deg', getf(P, 'margin_to_lut_boundary_deg', []), ...
+    'dsi_28', getf(P, 'dsi_28', []), 'dsi_56', getf(P, 'dsi_56', []));
+flags = {};
+if islogical(pdinfo.pd_flag_gt5) && pdinfo.pd_flag_gt5, flags{end+1} = '28 and 56 deg/s vectors differ by > 5 deg'; end
+if islogical(pdinfo.agree) && ~pdinfo.agree, flags{end+1} = 'WARNING > 10 deg: placement uses the 28 deg/s vector alone'; end
+S = decide(S, 'readout1', 'placement_pd', 'mean of the 28 and 56 deg/s vector PDs within 10 deg, else the 28 deg/s vector (warning); > 5 deg sets a flag; the TUTL snapped PD stays the reported metric', ...
+    pdinfo, sprintf('placement PD %s deg (rule %s; snapped %s deg; 28: %s deg L %s DSI %s; 56: %s deg L %s DSI %s)', num2str(pdinfo.pd_placement), pdinfo.pd_rule, ...
+    num2str(pdinfo.pd_deg), num2str(pdinfo.pd_vector_28), num2str(pdinfo.vector_length_28), num2str(pdinfo.dsi_28), ...
+    num2str(pdinfo.pd_vector_56), num2str(pdinfo.vector_length_56), num2str(pdinfo.dsi_56)), ...
+    false, strjoin(flags, '; '));
+% usable PD?
+si = getf(J, 'sequencer_inputs', struct());
+usable = getf(si, 'usable_pd', getf(J, 'usable_pd', []));
+if ischar(usable) || isstring(usable), usable = []; end
+rule = 'sequencer_inputs.usable_pd from the read-out when given (all 16 directions measured and normalized 28 deg/s vector length >= 0.1), else vector length (28 deg/s) >= pd_vector_length_floor and a stage-2 sequence written';
+if isempty(usable)
+    L28 = pdinfo.vector_length_28;
+    usable = ~isempty(L28) && L28 >= opts.pd_vector_length_floor && isfile(seq);
+end
+usable = logical(usable);
+S.out.readout1 = struct('dir', out_dir, 'method', method, 'stage1_json', js, 'stage2_sequence', tern(isfile(seq), seq, ''), ...
+    'placement', pdinfo, 'usable_pd', usable, 'stage2_mode', tern(usable, 'bars22', 'all88'));
+S = decide(S, 'readout1', 'usable_pd', rule, struct('vector_length_28', pdinfo.vector_length_28, 'floor', opts.pd_vector_length_floor, ...
+    'sequence_file', isfile(seq), 'usable_pd_from_readout', getf(si, 'usable_pd', 'n/a'), 'pd_inputs', getf(si, 'pd_inputs', 'n/a')), ...
+    tern(usable, 'stage 2 plays the 22 bars of the two placement sets', 'NO usable PD: stage 2 plays all 88 bars; sites will be placed from the Protocol 1 peak'), ...
+    ~usable, tern(usable, '', 'no_pd_fallback'));
+end
+
+function S = step_p2_stage2(S, opts)
+% Stage 2 package p2b/: the existing bar-flash pattern (copied from the stage-1 package) and position
+% functions written from the stage-2 sequence (22 bars at 80 ms + 920 ms and 14 ms + 486 ms, random order
+% per repeat; one function per repeat and class, named like the Protocol 2 generator's so the read-out
+% classifies the trials). Fallback: all 88 bars with the stage-1 package's own bar-flash rows, as run_protocol2 plays them.
+if isfield(S.out.p2b, 'folder') && ~isempty(S.out.p2b.folder) && isfield(S.out.p2b, 'state') && strcmp(S.out.p2b.state, 'completed')
+    say(S, 'Stage 2 already completed in %s', S.out.p2b.folder); return
+end
+p2a = S.out.p2a.folder;
+out_dir = fullfile(S.exp_folder, 'p2b');
+mode = S.out.readout1.stage2_mode;
+if opts.dry_run && ~isfolder(fullfile(p2a, 'Patterns'))
+    S.out.p2b = dry_p2_placeholder(S, 'p2b', sprintf('stage 2 (%s) needs the stage-1 package', mode)); S.out.p2b.mode = mode;
+    return
+end
+P = p2_plan(p2a, opts);
+if ~strcmp(mode, 'bars22'), for w = P.warnings, say(S, 'FLAG %s', w{1}); end, end
+if strcmp(mode, 'bars22')
+    B = build_stage2_package(p2a, S.out.readout1.stage2_sequence, out_dir, P, opts, S.cell);
+    rows = rows_from_package(out_dir);
+    say(S, 'Stage 2: %d bars x %d repeats (%d flashes), %.1f min, pattern %d of the stage-1 package.', ...
+        B.n_bars, B.n_reps, B.n_flashes, B.programmed_s/60, B.pattern_id);
+else
+    copy_package(p2a, out_dir);                 % all 88 bars: the package's own bar-flash rows and IDs
+    rows = P.stage2_rows_all88;
+    if ~isfolder(fullfile(out_dir, 'Reports')), mkdir(fullfile(out_dir, 'Reports')); end
+    write_json(fullfile(out_dir, 'Reports', 'rows.json'), struct('rows', rows, 'cleanup', struct('pattern_id', rows(1).pattern_id, 'gray_pfn_id', rows(1).pfn_id, 'zero_afn_id', 0), 'programmed_s', sum([rows.duration_s])));
+    B = struct('n_bars', 88, 'n_reps', P.n_reps, 'n_flashes', 88*2*P.n_reps, 'programmed_s', sum([rows.duration_s]), 'pattern_id', P.bar_flash_patterns(1));
+    say(S, 'FLAG stage 2 fallback: all 88 bars as today (%d rows, %.1f min).', numel(rows), B.programmed_s/60);
+end
+S.steps(strcmp({S.steps.id}, 'p2b')).est_min = B.programmed_s / 60;
+status = run_rows(opts, out_dir, rows, [], S);
+S.out.p2b = struct('folder', out_dir, 'mode', mode, 'n_bars', B.n_bars, 'n_reps', B.n_reps, 'n_flashes', B.n_flashes, ...
+    'rows', numel(rows), 'state', status.state, 'log_folder', fullfile(out_dir, 'Log Files'));
+end
+
+function S = step_readout(S, opts)
+% Read-out call 2 (or the only call in 'full' mode): center, window, sites, tables, figure. Then the
+% automatic decisions (c) and (f): the center is accepted when the sanity checks pass, else it falls
+% back to the Protocol 1 peak (tables shifted there, flagged); the 'center' option overrides (logged).
+out_dir = fullfile(S.exp_folder, 'readout'); if ~isfolder(out_dir), mkdir(out_dir); end
+tag = S.cell;
+method = call_readout(2, S, opts, out_dir);
+R = read_readout(out_dir, tag);
+S.out.readout = struct('dir', out_dir, 'method', method, 'summary', R.summary, 'tables', R.files);
+say(S, 'Read-out (%s): %s', method, summary_line(R.summary));
+if ~isempty(R.summary.warnings), say(S, 'FLAG read-out warnings: %s', strjoin(R.summary.warnings, ' | ')); end
+if ~isempty(R.summary.placement)
+    S = decide(S, 'readout', 'placement_pd', 'displayed from the read-out (rule applied there)', R.summary.placement, ...
+        sprintf('placement PD %s deg (rule %s; snapped %s deg)', num2str(getf(R.summary.placement, 'pd_placement', [])), ...
+        getf(R.summary.placement, 'pd_rule', ''), num2str(getf(R.summary.placement, 'pd_deg', []))), false, ...
+        tern(getf(R.summary.placement, 'pd_flag_gt5', false), '28/56 disagree > 5 deg', ''));
+end
+if ~strcmp(method, 'rapid_readout.m'), show_readout_figure(opts, fullfile(out_dir, [tag '_locations.png'])); end   % rapid_readout.m drew it
+
+% ---- decision (c)/(f): the center
+center = R.summary.center_col_row(:).';
+p1xy = [];
+if isfield(S.out, 'p1_peak') && isfield(S.out.p1_peak, 'xy') && ~isempty(S.out.p1_peak.xy), p1xy = double(S.out.p1_peak.xy(:).'); end
+if isempty(p1xy) && ~isempty(R.summary.p1_peak_col_row), p1xy = R.summary.p1_peak_col_row(:).'; end
+checks = struct();
+inputs = struct('readout_center', center, 'p1_peak', p1xy, 'centroid_offset_px', R.summary.centroid_offset, ...
+    'center_peak_mV', R.summary.center_peak_mV, 'profiles_unimodal', R.summary.profiles_unimodal, ...
+    'thresholds', struct('center_max_dist_px', opts.center_max_dist_px, 'center_max_offset_px', opts.center_max_offset_px, 'peak_floor_mV', opts.peak_floor_mV));
+if ~isempty(center) && ~isempty(p1xy)
+    checks.dist_to_p1_px = norm(center - p1xy); checks.near_p1 = checks.dist_to_p1_px <= opts.center_max_dist_px;
+else
+    checks.dist_to_p1_px = NaN; checks.near_p1 = 'n/a';
+end
+if ~isempty(R.summary.centroid_offset)
+    co = R.summary.centroid_offset;
+    if isstruct(co), co = [getf(co, 's', NaN), getf(co, 'v', NaN)]; end
+    if all(isfinite(co)), checks.inside_bar_set = all(abs(co) <= opts.center_max_offset_px); else, checks.inside_bar_set = 'n/a'; end
+else
+    checks.inside_bar_set = 'n/a';
+end
+if ~isempty(R.summary.center_peak_mV), checks.peak_above_floor = R.summary.center_peak_mV >= opts.peak_floor_mV; else, checks.peak_above_floor = 'n/a'; end
+if ~isempty(R.summary.profiles_unimodal), checks.unimodal = all(logical(R.summary.profiles_unimodal)); else, checks.unimodal = 'n/a'; end
+failed = {};
+for c = {'near_p1', 'inside_bar_set', 'peak_above_floor', 'unimodal'}
+    v = checks.(c{1});
+    if islogical(v) && ~v, failed{end+1} = c{1}; end %#ok<AGROW>
+end
+no_pd = isfield(S.out, 'readout1') && isfield(S.out.readout1, 'usable_pd') && ~S.out.readout1.usable_pd;
+shift = [0 0]; source = 'read-out M6 center'; fallback = false; flags = '';
+override = opts.center;
+if ~isempty(override)
+    if ischar(override) && strcmp(override, 'p1_peak'), target = p1xy; src = 'override: Protocol 1 peak';
+    else, target = double(override(:).'); src = sprintf('override: operator center %s', mat2str(target)); end
+    if isempty(target), error('run_session:stop', 'center override requested but no Protocol 1 peak position is known'); end
+    shift = round(target - center); source = src; flags = 'override';
+elseif no_pd
+    if isempty(p1xy), error('run_session:stop', 'no usable PD and no Protocol 1 peak position: cannot place the sites'); end
+    shift = round(p1xy - center); source = 'Protocol 1 peak (no usable PD after stage 1)'; fallback = true; flags = 'no_pd_fallback';
+elseif ~isempty(failed)
+    if isempty(p1xy)
+        flags = ['checks failed (' strjoin(failed, ', ') ') but no Protocol 1 peak position: read-out center kept'];
+        fallback = true;
+    else
+        shift = round(p1xy - center); source = 'Protocol 1 peak (sanity check failed)'; fallback = true;
+        flags = ['failed: ' strjoin(failed, ', ')];
+    end
+end
+S.center_shift_px = shift;
+S.out.readout.checks = checks; S.out.readout.center_source = source; S.out.readout.center_shift_px = shift;
+inputs.checks = checks;
+S = decide(S, 'readout', 'center', ['accept the read-out center when: within center_max_dist_px of the Protocol 1 peak, |M6 offset| <= center_max_offset_px (inside the bar set), ' ...
+    'center peak >= peak_floor_mV, profiles unimodal (when reported); else the Protocol 1 peak; the center option overrides'], ...
+    inputs, sprintf('%s; tables shifted by [%d %d] px', source, shift(1), shift(2)), fallback, flags);
+end
+
+function S = step_build(S, opts)
+if ~isfield(S.out, 'readout') || ~isfield(S.out.readout, 'dir'), error('run_session:skip', 'no read-out'); end
+rd = S.out.readout.dir; tag = S.cell; shift = S.center_shift_px;
+common = struct('cell', tag, 'side', S.side, 'ao_channel', opts.ao_channel, 'pretrial_s', opts.pretrial_s, ...
+    'ao_zero_tail_s', opts.ao_zero_tail_s, 'center_shift_px', shift, 'readout_dir', rd, 'dry_run', opts.dry_run, ...
+    'center_source', getf(S.out.readout, 'center_source', ''));
+p3b = build_prot3b_package(rd, fullfile(S.exp_folder, 'p3b'), common);
+p4 = build_prot4_package(rd, fullfile(S.exp_folder, 'p4'), common);
+S.out.build = struct('p3b', p3b, 'p4', p4);
+S.steps(strcmp({S.steps.id}, 'p3b')).est_min = p3b.programmed_s / 60;
+S.steps(strcmp({S.steps.id}, 'p4')).est_min = p4.programmed_s / 60;
+say(S, 'Prot3b: %d frames, %d blocks, %.1f min; Protocol 4: %d frames, %d flashes, %.1f min.%s', ...
+    p3b.n_frames, p3b.n_blocks, p3b.programmed_s/60, p4.n_frames, p4.n_flashes, p4.programmed_s/60, ...
+    tern(p3b.pat_written && p4.pat_written, '', '  (.pat files NOT written: no G4 pattern encoder on this machine)'));
+if ~isempty(p3b.warnings), say(S, 'FLAG Prot3b build: %s', strjoin(p3b.warnings, ' | ')); end
+if ~isempty(p4.warnings), say(S, 'FLAG Protocol 4 build: %s', strjoin(p4.warnings, ' | ')); end
+end
+
+function S = step_run_package(S, opts, which)
+if ~isfield(S.out, 'build') || ~isfield(S.out.build, which), error('run_session:skip', 'package not built'); end
+pkg = S.out.build.(which).folder;
+rows = rows_from_package(pkg);
+say(S, '%s: %d rows, %.1f min; AO%d carries the current command (0.25 V per pA) added to the fixed holding current.', ...
+    which, numel(rows), sum([rows.duration_s])/60, opts.ao_channel);
+status = run_rows(opts, pkg, rows, opts.ao_channel, S);
+S.out.(which) = struct('folder', pkg, 'rows', numel(rows), 'state', status.state, 'elapsed_s', status.elapsed_s, ...
+    'log_folder', fullfile(pkg, 'Log Files'));
+end
+
+% =========================================================================================
+% read-out calls (the files are the contract; rapid_readout.m or the Python script produce them)
+% =========================================================================================
+function method = call_readout(call, S, opts, out_dir)
+tag = S.cell;
+if ~isempty(opts.readout_dir)
+    copy_readout_tables(opts.readout_dir, out_dir, tag); method = 'tables given'; return
+end
+if ~isempty(opts.readout_fn)
+    opts.readout_fn(call, S, out_dir); method = 'readout_fn'; return
+end
+if strcmp(S.p2_mode, 'full'), p2 = S.out.p2.folder; else, p2 = S.out.p2a.folder; end
+if exist('rapid_readout', 'file') == 2
+    % src/analysis/protocol2/rapid_readout.m, interface of 26 Oct 2026 (evening): call 1 on the stage-1 folder
+    % writes <tag>_stage1.json and the stage-2 tables; call 2 adds 'Stage2', <session>/p2b and takes the bar
+    % flashes from that log; 'P1Peak' puts the Protocol 1 peak into other_centers and the distance check.
+    method = 'rapid_readout.m';
+    extra = {'Cell', tag, 'Out', out_dir, 'Figure', opts.show_figures};
+    if isfield(S.out, 'p1_peak') && isfield(S.out.p1_peak, 'xy') && ~isempty(S.out.p1_peak.xy)
+        extra = [extra, {'P1Peak', double(S.out.p1_peak.xy(:).')}];
+    end
+    if call == 2 && strcmp(S.p2_mode, 'two_stage')
+        extra = [extra, {'Stage2', S.out.p2b.folder}];
+    end
+    rapid_readout(p2, extra{:});
+    return
+end
+script = fullfile(opts.analysis_repo, 'tools', 'rapid_prot2_fast.py');
+if ~isfile(script), script = fullfile(opts.analysis_repo, 'tools', 'rapid_prot2_locations.py'); end
+method = ['python3 ' script];
+cmd = sprintf('python3 "%s" --session "%s" --cell %s --out "%s"', script, p2, tag, out_dir);
+say(S, '%s', cmd);
+[rc, txt] = system(cmd);
+write_text(fullfile(out_dir, sprintf('readout_call%d_stdout.txt', call)), txt);
+if rc ~= 0, error('run_session:readout', 'Read-out script failed (%d): %s', rc, txt); end
+end
+
+function show_readout_figure(opts, png)
+if opts.show_figures && isfile(png) && usejava('desktop')
+    try, figure('Name', 'Rapid read-out', 'NumberTitle', 'off'); imshow(imread(png)); drawnow; catch, end
+end
+end
+
+function copy_readout_tables(src, dst, tag)
+n = 0;
+for f = dir(fullfile(src, [tag '_*'])).'
+    copyfile(fullfile(f.folder, f.name), fullfile(dst, f.name)); n = n + 1;
+end
+if n == 0, error('run_session:readout', 'No %s_* read-out files in %s', tag, src); end
+end
+
+function R = read_readout(out_dir, tag)
+need = {'prot3b_frames', 'prot3b_blocks', 'prot4_frames', 'prot4_sequence'};
+R = struct(); R.files = struct();
+for k = 1:numel(need)
+    f = fullfile(out_dir, sprintf('%s_%s.csv', tag, need{k}));
+    if ~isfile(f), error('run_session:readout', 'Missing read-out table %s', f); end
+    R.files.(need{k}) = f;
+end
+R.summary = struct('pd_deg', [], 'pd_vector_deg', [], 'pd_placement', [], 'pd_rule', '', 'placement', [], 'center_col_row', [], ...
+    'static_vm_mV', [], 'warnings', {{}}, 'n_sites', [], 'prot3b_min', [], 'prot4_min', [], 'centroid_offset', [], ...
+    'center_peak_mV', [], 'profiles_unimodal', [], 'p1_peak_col_row', [], 'sequencer_inputs', struct());
+js = fullfile(out_dir, [tag '_locations.json']);
+if isfile(js)
+    L = jsondecode(fileread(js));
+    R.files.locations = js;
+    R.summary.pd_deg = getf(L, 'pd_deg', []);
+    R.summary.pd_vector_deg = getf(L, 'pd_vector_deg', getf(L, 'pd_vector_28', []));
+    R.summary.pd_placement = getf(L, 'pd_placement', []); R.summary.pd_rule = getf(L, 'pd_rule', '');
+    R.summary.placement = getf(L, 'placement', []);
+    R.summary.center_col_row = getf(L, 'rf_center_col_row_1based', []); R.summary.static_vm_mV = getf(L, 'static_vm_mV', []);
+    si = getf(L, 'sequencer_inputs', struct());
+    % placement-frame centroid offset when the read-out gives it (sets actually shown), else the TUTL-axes one
+    R.summary.centroid_offset = getf(si, 'centroid_offset_placement_px', getf(L, 'centroid_offset_px', []));
+    pu = getf(si, 'profiles_unimodal', getf(L, 'profiles_unimodal', []));
+    if ischar(pu) || isstring(pu), pu = []; end               % "n/a": no rule the read-out can justify
+    R.summary.profiles_unimodal = pu;
+    R.summary.center_peak_mV = getf(si, 'center_expected_ON_80ms_peak_mV', []);
+    R.summary.sequencer_inputs = si;
+    oc = getf(L, 'other_centers', struct());
+    R.summary.p1_peak_col_row = getf(oc, 'protocol1_ON_peak', []);
+    w = getf(L, 'site_warnings', {}); if isnumeric(w), w = {}; end; if ischar(w), w = {w}; end
+    if isstruct(w), w = arrayfun(@(x) jsonencode(x), w, 'UniformOutput', false); end
+    R.summary.warnings = cellstr(w(:).');
+    if isfield(L, 'sites') && ~isempty(L.sites)
+        R.summary.n_sites = numel(L.sites);
+        s1 = L.sites(1); if iscell(L.sites), s1 = L.sites{1}; end
+        if isempty(R.summary.center_peak_mV) && isfield(s1, 'expected_ON_80ms_peak_mV') && strcmp(getf(s1, 'region', ''), 'center')
+            R.summary.center_peak_mV = s1.expected_ON_80ms_peak_mV;
+        end
+    end
+    if isfield(L, 'prot3b') && isfield(L.prot3b, 'total_s'), R.summary.prot3b_min = L.prot3b.total_s / 60; end
+    if isfield(L, 'protocol4') && isfield(L.protocol4, 'total_s'), R.summary.prot4_min = L.protocol4.total_s / 60; end
+end
+end
+
+function s = summary_line(sm)
+parts = {};
+if ~isempty(sm.pd_deg), parts{end+1} = sprintf('PD %g deg%s%s', sm.pd_deg, tern(isempty(sm.pd_vector_deg), '', sprintf(' (vector %.1f)', sm.pd_vector_deg)), tern(isempty(sm.pd_placement), '', sprintf(', placement %g', sm.pd_placement))); end
+if ~isempty(sm.center_col_row), parts{end+1} = sprintf('center col/row %s', mat2str(sm.center_col_row(:).', 4)); end
+if ~isempty(sm.static_vm_mV), parts{end+1} = sprintf('static Vm %.1f mV', sm.static_vm_mV); end
+if ~isempty(sm.center_peak_mV), parts{end+1} = sprintf('center peak %.1f mV', sm.center_peak_mV); end
+if ~isempty(sm.n_sites), parts{end+1} = sprintf('%d sites', sm.n_sites); end
+if ~isempty(sm.prot3b_min), parts{end+1} = sprintf('Prot3b %.1f min', sm.prot3b_min); end
+if ~isempty(sm.prot4_min), parts{end+1} = sprintf('Protocol 4 %.1f min', sm.prot4_min); end
+if isempty(parts), s = 'tables present (no locations.json summary)'; else, s = strjoin(parts, ', '); end
+end
+
+% =========================================================================================
+% running rows on the controller (modeled on run_protocol3's loop and cleanup guard)
+% =========================================================================================
+function status = run_rows(opts, pkg, rows, ao_channel, S)
+rep_dir = fullfile(pkg, 'Reports'); if ~isfolder(rep_dir), mkdir(rep_dir); end
+logdir = fullfile(pkg, 'Log Files');
+if isfolder(logdir) && numel(dir(logdir)) > 2
+    stamp = char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
+    movefile(logdir, fullfile(pkg, ['Log Files_aborted_' stamp]));
+    say(S, 'Existing logs moved to Log Files_aborted_%s', stamp);
+end
+status = struct('state', 'starting', 'package', pkg, 'started', iso_now(), 'finished', '', 'rows_total', numel(rows), ...
+    'rows_completed', 0, 'rows', {struct('index', num2cell(1:numel(rows)), 'label', {rows.label}, 'pattern_id', {rows.pattern_id}, ...
+    'pfn_id', {rows.pfn_id}, 'afn_id', {rows.afn_id}, 'duration_s', {rows.duration_s}, 'started', '', 'elapsed_s', [], 'result', 'pending')}, ...
+    'cleanup', struct('step', {}, 'ok', {}, 'detail', {}), 'error', '', 'elapsed_s', []);
+status_file = fullfile(rep_dir, 'run_status.json');
+write_json(status_file, status);
+ctlr = opts.controller_factory();
+ctx = containers.Map('KeyType', 'char', 'ValueType', 'any');
+ctx('ctlr') = ctlr; ctx('opened') = false; ctx('log') = false; ctx('done') = false; ctx('ao') = ao_channel;
+ctx('cleanup_ids') = cleanup_ids_of(pkg, rows);
+guard = onCleanup(@() controller_cleanup(ctx)); %#ok<NASGU>
+t_run = tic;
+try
+    ctlr.open(true); ctx('opened') = true;
+    checked('setRootDirectory', ctlr.setRootDirectory(pkg));
+    if ~isempty(ao_channel), checked('setActiveAOChannels', ctlr.setActiveAOChannels(ao_channel)); end
+    % The AI TCP stream (5-byte 0x14 messages, ~90 per s) is never read: it fills PanelsController's reply
+    % buffer, whose byte-pair search then takes stream bytes for replies ('Index exceeds ... 1' at resp(2)).
+    % Disk logging does not need it (ADC rates come from the Host configuration).
+    if ~isempty(opts.ai_channels), checked('setActiveAIChannels', ctlr.setActiveAIChannels(opts.ai_channels)); end
+    ctx('log') = true;
+    checked('startLog', ctlr.startLog());
+    status.state = 'running'; write_json(status_file, status);
+    done_s = [0 cumsum([rows.duration_s])];                     % programmed seconds before each row
+    opts.progress.refresh(S);                                   % the step's estimate from its rows
+    for k = 1:numel(rows)
+        r = rows(k);
+        prog = opts.progress.row(k, numel(rows), r.label, done_s(k), done_s(end));
+        fprintf('    row %3d/%d  %-26s pat %d  pfn %d%s  %6.1f s  %s\n', k, numel(rows), r.label, r.pattern_id, r.pfn_id, ...
+            tern(isempty(ao_channel), '', sprintf('  afn %d', r.afn_id)), r.duration_s, prog);
+        status.rows(k).started = iso_now(); t_row = tic;
+        % what the arena is playing now, for a display viewer (one small file, rewritten per row)
+        write_json(fullfile(S.exp_folder, 'now_playing.json'), struct('package', pkg, 'row', k, 'n_rows', numel(rows), ...
+            'label', r.label, 'pattern_id', r.pattern_id, 'pfn_id', r.pfn_id, 'afn_id', r.afn_id, 'duration_s', r.duration_s, 'started', status.rows(k).started, ...
+            'started_posix_ms', int64(posixtime(datetime('now', 'TimeZone', 'UTC')) * 1000)));
+        checked('setControlMode', ctlr.setControlMode(1));
+        checked('setPatternID', ctlr.setPatternID(r.pattern_id));
+        checked('setPatternFunctionID', ctlr.setPatternFunctionID(r.pfn_id));
+        ctlr.setPositionX(1);
+        if ~isempty(ao_channel), checked('setAOFunctionID', ctlr.setAOFunctionID(ao_channel, r.afn_id)); end
+        checked('startDisplay', ctlr.startDisplay(r.deciseconds, true));
+        status.rows(k).elapsed_s = toc(t_row); status.rows(k).result = 'completed'; status.rows_completed = k;
+        write_json(status_file, status);
+    end
+    ctx('done') = true;
+    status.cleanup = controller_cleanup(ctx);
+    status.state = 'completed';
+catch err
+    status.error = sprintf('%s: %s', err.identifier, err.message);
+    status.ibuf_dump = dump_reply_buffer(ctlr, rep_dir);         % before the cleanup adds its own replies
+    status.cleanup = controller_cleanup(ctx);
+    status.state = 'failed'; status.finished = iso_now(); status.elapsed_s = toc(t_run);
+    write_json(status_file, status);
+    rethrow(err);
+end
+status.finished = iso_now(); status.elapsed_s = toc(t_run);
+write_json(status_file, status);
+end
+
+function f = dump_reply_buffer(ctlr, rep_dir)
+% Diagnostic for the intermittent 'Index exceeds ... must not exceed 1' inside PanelsController (a reply
+% parsed as one byte; Prot3 2 and 6 Oct, the arena run of 27 Oct): save the controller's private TCP input
+% buffer (iBuf) as it was at the failure, as .mat and as hex text. Read only; '' when there is none (mock).
+f = '';
+try
+    w = warning('off', 'MATLAB:structOnObject'); s = struct(ctlr); warning(w);
+    if ~isfield(s, 'iBuf'), return; end
+    ibuf = s.iBuf; %#ok<NASGU>
+    stamp = char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
+    f = fullfile(rep_dir, ['ibuf_at_failure_' stamp]);
+    save([f '.mat'], 'ibuf');
+    write_text([f '.txt'], sprintf('%d bytes\n%s\n', numel(s.iBuf), strjoin(cellstr(dec2hex(s.iBuf, 2)).', ' ')));
+    f = [f '.mat'];
+catch
+end
+end
+
+function steps = controller_cleanup(ctx)
+steps = struct('step', {}, 'ok', {}, 'detail', {});
+if isKey(ctx, 'finished') && ctx('finished'), return; end
+ctx('finished') = true;
+ctlr = ctx('ctlr');
+if isempty(ctlr), return; end
+if ctx('opened')
+    steps(end+1) = guarded('stopDisplay', @() ctlr.stopDisplay());
+    if isKey(ctx, 'cleanup_ids') && ~isempty(ctx('cleanup_ids'))
+        c = ctx('cleanup_ids');
+        steps(end+1) = guarded('setControlMode(1)', @() ctlr.setControlMode(1));
+        steps(end+1) = guarded('setPatternID(gray)', @() ctlr.setPatternID(c.pattern_id));
+        steps(end+1) = guarded('setPatternFunctionID(gray)', @() ctlr.setPatternFunctionID(c.gray_pfn_id));
+        steps(end+1) = guarded('setPositionX(1)', @() noret(@() ctlr.setPositionX(1)));
+        if ~isempty(ctx('ao')) && c.zero_afn_id > 0
+            steps(end+1) = guarded('setAOFunctionID(zero)', @() ctlr.setAOFunctionID(ctx('ao'), c.zero_afn_id));
+        end
+        steps(end+1) = guarded('startDisplay(5) flush', @() ctlr.startDisplay(5, true));
+    end
+    if ~isempty(ctx('ao'))
+        steps(end+1) = guarded('setActiveAOChannels([]) (AO off)', @() ctlr.setActiveAOChannels(zeros(1, 0)));
+    end
+    if ctx('log'), steps(end+1) = guarded('stopLog', @() ctlr.stopLog('showTimeoutMessage', true)); end
+end
+steps(end+1) = guarded('close', @() noret(@() ctlr.close()));
+if ~ctx('done')
+    fprintf(2, 'run_session: controller cleanup after an interruption (%d steps, %d ok)\n', numel(steps), sum([steps.ok]));
+end
+end
+
+function s = guarded(label, fn)
+s = struct('step', label, 'ok', false, 'detail', '');
+try
+    rv = fn();
+    if (islogical(rv) || isnumeric(rv)) && isscalar(rv), s.ok = logical(rv); s.detail = sprintf('returned %d', rv);
+    else, s.ok = true; s.detail = 'no return value'; end
+catch e
+    s.detail = ['error: ' e.message];
+end
+end
+
+function rv = noret(fn)
+fn(); rv = [];
+end
+
+function checked(label, rtn)
+if ~(islogical(rtn) || isnumeric(rtn)) || ~isscalar(rtn) || ~rtn
+    error('run_session:controller', 'Controller command %s did not confirm; run stopped.', label);
+end
+end
+
+function c = cleanup_ids_of(pkg, rows)
+f = fullfile(pkg, 'Reports', 'rows.json');
+c = struct('pattern_id', rows(1).pattern_id, 'gray_pfn_id', rows(1).pfn_id, 'zero_afn_id', 0);
+if isfile(f)
+    j = jsondecode(fileread(f));
+    if isfield(j, 'cleanup'), c = j.cleanup; end
+end
+end
+
+% =========================================================================================
+% Protocol 1 and Protocol 2 packages
+% =========================================================================================
+function copy_package(src, dst)
+if ~isfolder(dst), mkdir(dst); end
+for d = {'Patterns', 'Functions', 'Analog Output Functions'}
+    if isfolder(fullfile(src, d{1})), copyfile(fullfile(src, d{1}), fullfile(dst, d{1})); end
+end
+for f = [dir(fullfile(src, '*.g4p')); dir(fullfile(src, 'currentExp.mat'))].'
+    copyfile(fullfile(f.folder, f.name), fullfile(dst, f.name));
+end
+end
+
+function rows = rows_from_g4p(pkg)
+d = dir(fullfile(pkg, '*.g4p'));
+if ~isscalar(d), error('run_session:p1', 'Expected one .g4p in %s', pkg); end
+q = load(fullfile(pkg, d.name), '-mat'); p = q.exp_parameters;
+c = load(fullfile(pkg, 'currentExp.mat')); cx = c.currentExp;
+pat_names = text_names(cx.pattern.pattNames);
+fn_names = text_names(cx.function.functionName);
+if p.is_randomized, error('run_session:p1', 'Randomized .g4p not supported'); end
+raw = {}; labels = {};
+if ~isempty(p.pretrial{12}) && p.pretrial{12} > 0, raw(end+1, :) = p.pretrial; labels{end+1} = 'pretrial'; end
+for r = 1:p.repetitions
+    for b = 1:size(p.block_trials, 1)
+        raw(end+1, :) = p.block_trials(b, :); labels{end+1} = sprintf('rep %d block %d', r, b); %#ok<AGROW>
+    end
+end
+if ~isempty(p.posttrial{12}) && p.posttrial{12} > 0, raw(end+1, :) = p.posttrial; labels{end+1} = 'posttrial'; end
+rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
+for k = 1:size(raw, 1)
+    pid = find(strcmp(pat_names, raw{k, 2})); fid = find(strcmp(fn_names, raw{k, 3}));
+    if ~isscalar(pid) || ~isscalar(fid)
+        error('run_session:p1', 'Row %d (%s): pattern/function not found once in currentExp', k, labels{k});
+    end
+    rows(k) = struct('label', labels{k}, 'pattern_id', pid, 'pfn_id', fid, 'afn_id', 0, ...
+        'duration_s', raw{k, 12}, 'deciseconds', deciseconds(raw{k, 12}, labels{k}));
+end
+end
+
+function names = text_names(c)
+c = c(:);
+c = c(cellfun(@(x) ischar(x) || (isstring(x) && isscalar(x)), c));
+names = regexprep(cellstr(c), '\.mat$', '');
+end
+
+function [pat6, pat12] = p1_square_patterns(roots)
+% The 6-px and 12-px square patterns of a Protocol 1 package ('' when absent): the files named *6px*square*
+% and *12px*square* (0002_6px_... and 0001_12px_... in the rig's packages; a 6pxONLY package has only the
+% first), under Patterns/ of the first of ROOTS that has square patterns.
+pat6 = ''; pat12 = ''; pkg = '';
+for r = cellstr(roots)
+    if ~isempty(r{1}) && (~isempty(dir(fullfile(r{1}, 'Patterns', '*square*.mat'))) || ~isempty(dir(fullfile(r{1}, 'Patterns', '0002_*.mat'))))
+        pkg = r{1}; break
+    end
+end
+if isempty(pkg), return; end
+d = dir(fullfile(pkg, 'Patterns', '*square*.mat')); names = sort({d.name});
+i6 = find(contains(names, '6px') & ~contains(names, '12px'), 1); i12 = find(contains(names, '12px'), 1);
+if ~isempty(i6), pat6 = fullfile(pkg, 'Patterns', names{i6}); end
+if ~isempty(i12), pat12 = fullfile(pkg, 'Patterns', names{i12}); end
+if isempty(pat6)
+    d = dir(fullfile(pkg, 'Patterns', '0002_*.mat'));     % older packages without the grid in the name
+    if isscalar(d), pat6 = fullfile(d.folder, d.name); end
+end
+end
+
+function Q = call_p1_readout(fn, p1_folder, out_dir, pattern)
+if nargin(fn) == 2, Q = fn(p1_folder, out_dir); else, Q = fn(p1_folder, out_dir, pattern); end
+end
+
+function R = take_p1_fields(R, Q)
+for g = {'frame', 'xy', 'peak_mV', 'polarity'}
+    if isfield(Q, g{1}), R.(g{1}) = Q.(g{1}); end
+end
+end
+
+function [xy, polarity] = frame_to_xy(pattern_file, frame)
+% Center (col, row: the median pixel) and polarity of frame FRAME of a Protocol 1 square pattern, as
+% patt_frame_to_coord computes it from the rig's fixed 6-px pattern.
+q = load(pattern_file); Pats = q.pattern.Pats;
+if frame > size(Pats, 3), error('run_session:p1', 'Peak frame %d exceeds the %d frames of %s', frame, size(Pats, 3), pattern_file); end
+f = Pats(:, :, frame); bkg = mode(f(:));
+[r, c] = find(f ~= bkg);
+if isempty(r), xy = []; polarity = 'background'; return; end
+xy = [median(c), median(r)];
+polarity = tern(max(f(:)) > bkg, 'ON', 'OFF');
+end
+
+function md = p2_metadata(S)
+md = struct('Frame', S.out.p1_peak.frame, 'Side', S.side, 'Age', S.age, 'Strain', S.strain, ...
+    'Date', char(datetime('now', 'Format', 'yyyy_MM_dd')), 'Time', char(datetime('now', 'Format', 'HH-mm-ss')), ...
+    'NotesStart', sprintf('run_session %s', S.cell));
+end
+
+function o = dry_p2_placeholder(S, id, what)
+folder = fullfile(S.exp_folder, id);
+if ~isfolder(folder), mkdir(folder); end
+write_text(fullfile(folder, 'DRY_RUN.txt'), sprintf('Dry run: %s was not generated or run (needs the rig paths and G4_Display_Tools). Live: %s.\n', id, what));
+o = struct('folder', folder, 'mode', 'dry_run', 'state', 'dry_run');
+say(S, 'Dry run: %s skipped (placeholder %s).', id, folder);
+end
+
+function [exp_folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(peak, side, metadata, exp_path)
+% Mirrors generate_protocol2 (nested_RF_stimulus, 26 Oct 2026) without its dialog, the run and the
+% Google-sheet export. Keep in step with that file. Needs the rig (G4_Display_Tools, C:\matlabroot paths).
+% The package goes to <exp_path>\data\<yyyy_MM_dd_HH_mm> (create_exp_dir_G4), as generate_protocol2's does.
+% PEAK is S.out.p1_peak: aimed at its aim_xy / aim_polarity (the median pixel of the peak frame in the
+% pattern that was analysed, rounded as patt_frame_to_coord rounds); without them (no pattern found) at
+% its 6-px frame through patt_frame_to_coord, generate_protocol2's lookup in the rig's fixed 6-px pattern.
+px_intensity = [4, 0, 15]; px_crop_flash = 30; px_crop_bar = 30; n_flank = 5; n_reps = 3;
+if isfield(peak, 'aim_xy') && numel(peak.aim_xy) == 2
+    x = int16(peak.aim_xy(1)); y = int16(peak.aim_xy(2)); on_off = lower(peak.aim_polarity);
+else
+    here = pwd; [x, y, on_off] = patt_frame_to_coord(peak.frame, side); cd(here);
+end
+if x < 17 + px_crop_flash/2 || x > 192 - px_crop_flash/2, warning('run_session:p2', 'x %d is near the screen edge', x); end
+if y < 1 + px_crop_flash/2 || y > 48 - px_crop_flash/2, warning('run_session:p2', 'y %d is near the screen edge', y); end
+exp_name = string(datetime('now', 'TimeZone', 'local', 'Format', 'yyyy_MM_dd_HH_mm'));
+exp_folder = create_exp_dir_G4(exp_name, exp_path);
+generate_flash_stimulus_xy(x, y, px_intensity, px_crop_flash, 4, on_off, 0.16, 0.44, exp_folder);
+generate_bar_stimulus_xy(x, y, px_intensity, px_crop_bar, on_off, exp_folder);
+fn_dir = fullfile(exp_folder, 'Functions');
+generate_bar_pos_fns(fn_dir, px_crop_bar);
+generate_bar_flash_stimulus_xy(x, y, px_intensity, px_crop_bar, on_off, exp_folder, n_flank);
+generate_bar_flash_pos_fns(fn_dir, n_flank, n_reps);
+[pattern_order, func_order, trial_dur] = create_protocol2(exp_folder, metadata);
+end
+
+function P = p2_plan(folder, opts)
+% The condition list of a Protocol 2 package (currentExp.mat: pattern_order, func_order, trial_dur) split
+% into stage 1 (everything but the bar-flash pattern) and stage 2 (the bar-flash conditions as
+% run_protocol2 plays them: the pattern whose file name holds FLASHES, every repeat, with the -Rep<r>
+% position function of the same name on repeat r; func_order names the Rep1 functions).
+c = load(fullfile(folder, 'currentExp.mat'));
+if ~isfield(c, 'pattern_order'), error('run_session:p2', '%s has no pattern_order (not a create_protocol2 package)', folder); end
+po = double(c.pattern_order(:).'); fo = double(c.func_order(:).'); td = double(c.trial_dur(:).');
+n_reps = opts.n_reps_p2;
+[pat_ids, pat_names] = package_files(fullfile(folder, 'Patterns'));
+if isempty(opts.p2_bar_flash_pattern_id)
+    flash = pat_ids(contains(pat_names, 'FLASHES'));
+    if isempty(flash), error('run_session:p2', 'no pattern named FLASHES in %s (set p2_bar_flash_pattern_id)', fullfile(folder, 'Patterns')); end
+else
+    flash = double(opts.p2_bar_flash_pattern_id(:).');
+end
+is_bar = ismember(po, flash);
+[fn_ids, fn_names] = package_files(fullfile(folder, 'Functions'));
+rep_fn = repmat(fo, n_reps, 1); warn = {};
+for i = find(is_bar)
+    f1 = fn_names(fn_ids == fo(i));
+    if ~isscalar(f1) || isempty(regexp(f1{1}, 'Rep1(?!\d)', 'once')), continue, end
+    for r = 2:n_reps
+        k = find(strcmp(fn_names, regexprep(f1{1}, 'Rep1(?!\d)', sprintf('Rep%d', r))));
+        if isscalar(k)
+            rep_fn(r, i) = fn_ids(k);
+        else
+            warn{end+1} = sprintf('no Rep%d function for %s (cond %d); repeat %d plays the Rep1 function', r, f1{1}, i, r); %#ok<AGROW>
+        end
+    end
+end
+P = struct('pattern_order', po, 'func_order', fo, 'trial_dur', td, 'n_reps', n_reps, 'bar_flash_patterns', flash, ...
+    'stage1_idx', find(~is_bar), 'stage2_idx', find(is_bar), 'rep_functions', rep_fn);
+P.warnings = warn;
+% Protocol 2 packages carry trial durations such as 3.328 s; run_protocol2 plays them as
+% ceil(dur*10)-1 deciseconds, and so does the sequencer for these rows (never for the packages it builds).
+rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
+for r = 1:n_reps
+    for i = P.stage1_idx
+        rows(end+1) = row_p2(sprintf('rep %d cond %d', r, i), po(i), fo(i), td(i)); %#ok<AGROW>
+    end
+end
+P.stage1_rows = rows;
+rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
+for r = 1:n_reps
+    for i = P.stage2_idx
+        rows(end+1) = row_p2(sprintf('rep %d bars cond %d', r, i), po(i), rep_fn(r, i), td(i)); %#ok<AGROW>
+    end
+end
+P.stage2_rows_all88 = rows;
+end
+
+function [ids, names] = package_files(d)
+% IDs (the 4-digit file prefix) and names after the prefix of the .mat files in a package's Patterns\ or
+% Functions\ folder (the Rep1/Rep2/Rep3 functions differ in their prefix, so names are compared without it).
+f = dir(fullfile(d, '*.mat'));
+f = f(~cellfun(@isempty, regexp({f.name}, '^\d{4}_', 'once')));
+ids = cellfun(@(n) str2double(n(1:4)), {f.name}); names = cellfun(@(n) n(5:end), {f.name}, 'UniformOutput', false);
+end
+
+function r = row_p2(label, pattern_id, pfn_id, duration_s)
+ds = max(1, ceil(duration_s * 10) - 1);            % run_protocol2's startDisplay(ceil(trial_t*10)-1)
+r = struct('label', label, 'pattern_id', pattern_id, 'pfn_id', pfn_id, 'afn_id', 0, 'duration_s', duration_s, 'deciseconds', ds);
+end
+
+function B = build_stage2_package(p2a, seq_csv, out_dir, P, opts, tag)
+% Stage-2 package: the bar-flash pattern copied from the stage-1 package as pattern 1 (its name keeps
+% "FLASHES"), one position function per repeat and class from the stage-2 sequence table (repeat, cls,
+% order, bar_pattern_frame_1based, flash_ms, gray_ms), 3 s gray first; 2 s gray pretrial and posttrial.
+if isempty(seq_csv) || ~isfile(seq_csv), error('run_session:p2', 'stage-2 sequence table missing (%s)', seq_csv); end
+Q = readtable(seq_csv, 'TextType', 'string', 'Delimiter', ',');
+pat_id = P.bar_flash_patterns(1);
+src = dir(fullfile(p2a, 'Patterns', sprintf('%04d_*.mat', pat_id)));
+if ~isscalar(src), error('run_session:p2', 'bar-flash pattern %04d_*.mat not found once in %s', pat_id, fullfile(p2a, 'Patterns')); end
+dirs = new_package_dir(out_dir);
+copyfile(fullfile(src.folder, src.name), fullfile(dirs.pat, ['0001_' src.name(6:end)]));
+pat_bin = fullfile(p2a, 'Patterns', sprintf('pat%04d.pat', pat_id));
+if isfile(pat_bin), copyfile(pat_bin, fullfile(dirs.pat, 'pat0001.pat')); end
+q = load(fullfile(src.folder, src.name)); n_frames = size(q.pattern.Pats, 3);
+% The read-out numbers the 88 bars 1..88 (S.cx / the frame log's 0-based value); bar k is pattern frame k + 1
+% (frame 1 = background), so the table's bar numbers are shifted by one here.
+Q.bar_pattern_frame_1based = Q.bar_pattern_frame_1based + 1;
+frames_all = Q.bar_pattern_frame_1based.';
+if any(frames_all < 2 | frames_all > n_frames), error('run_session:p2', 'stage-2 frames outside 2..%d of the bar pattern', n_frames); end
+reps_in_table = unique(Q.repeat).';
+n_reps = opts.n_reps_stage2;
+settle_s = 3;
+pfn(1) = write_function(pfn_sections(opts.pretrial_s, 1, [], [], [], n_frames), 'pfn', 1, dirs.fn, sprintf('gray_%gs', opts.pretrial_s), n_frames);
+rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
+rows(1) = row('pretrial', 1, 1, 0, opts.pretrial_s);
+rng(uint32(mod(sum(double(tag)) * 7919, 2^31)), 'twister');   % reproducible extra repeats, seeded from the cell tag
+% The read-out classifies stage-2 trials by the position-function file names ("flashes_80ms" / "flashes_14ms",
+% the Protocol 2 generator's names) and finds the bar geometry in the one pattern named "FLASHES": one
+% function per repeat and class, 3 s gray first, then the table's order of that class.
+eh = {'repeat', 'cls', 'order', 'pattern_frame', 'flash_ms', 'gray_ms', 'position_function', 'flash_onset_s', 'flash_onset_programmed_s'};
+er = {}; t = opts.pretrial_s; n_flash = 0; fid_next = 2;
+for r = 1:n_reps
+    src_rep = reps_in_table(mod(r - 1, numel(reps_in_table)) + 1);
+    T = Q(Q.repeat == src_rep, :);
+    [~, first] = unique(T.cls, 'stable');
+    cls_order = T.cls(sort(first));
+    for ci = 1:numel(cls_order)
+        Tc = sortrows(T(T.cls == cls_order(ci), :), 'order');
+        if r > numel(reps_in_table), Tc = Tc(randperm(height(Tc)), :); end   % more repeats than the table: fresh order
+        frames = Tc.bar_pattern_frame_1based.'; fl = Tc.flash_ms.'/1000; gr = Tc.gray_ms.'/1000;
+        func = pfn_sections(settle_s, 1, frames, fl, gr, n_frames);
+        dur = r6(numel(func)/500);
+        name = sprintf('bar_flashes_%dms_%dms_%dbars_rep%d', Tc.flash_ms(1), Tc.gray_ms(1), numel(frames), r);
+        pfn(fid_next) = write_function(func, 'pfn', fid_next, dirs.fn, name, n_frames); %#ok<AGROW>
+        rows(end+1) = row(sprintf('stage 2 rep %d %s (%d bars)', r, char(cls_order(ci)), numel(frames)), 1, fid_next, 0, dur); %#ok<AGROW>
+        onset = settle_s;
+        for e = 1:numel(frames)
+            er(end+1, :) = {r, char(Tc.cls(e)), Tc.order(e), frames(e), Tc.flash_ms(e), Tc.gray_ms(e), pfn(fid_next).stem, r6(onset), r6(t + onset)}; %#ok<AGROW>
+            onset = onset + fl(e) + gr(e);
+        end
+        t = t + dur; n_flash = n_flash + numel(frames); fid_next = fid_next + 1;
+    end
+end
+rows(end+1) = row('posttrial', 1, 1, 0, opts.pretrial_s);
+programmed = sum([rows.duration_s]);
+pat = struct('id', 1, 'stem', ['0001_' src.name(6:end-4)], 'x_num', n_frames, 'y_num', 1, 'gs_val', 4, 'arena_pitch', 0);
+write_current_exp(out_dir, pat, pfn, []);
+write_json(fullfile(dirs.rep, 'rows.json'), struct('rows', rows, 'cleanup', struct('pattern_id', 1, 'gray_pfn_id', 1, 'zero_afn_id', 0), 'programmed_s', programmed));
+write_csv(fullfile(dirs.rep, 'event_ledger.csv'), eh, er);
+cfg = struct('schema', 'run_session/2', 'protocol', 'Protocol 2 stage 2', 'cell', tag, 'generated', iso_now(), 'source_sequence', seq_csv, ...
+    'source_sequence_sha256', sha256_file(seq_csv), 'bar_pattern_from', fullfile(src.folder, src.name), 'bar_pattern_id_in_stage1', pat_id, ...
+    'n_bars', numel(unique(frames_all)), 'repeats', n_reps, 'repeats_in_table', numel(reps_in_table), 'settle_s', settle_s, ...
+    'programmed_duration_s', programmed, 'flashes', n_flash);
+write_json(fullfile(dirs.rep, 'config.json'), cfg);
+B = struct('folder', out_dir, 'n_bars', numel(unique(frames_all)), 'n_reps', n_reps, 'n_flashes', n_flash, 'programmed_s', programmed, 'pattern_id', pat_id);
+end
+
+% =========================================================================================
+% Prot3b package from the read-out tables
+% =========================================================================================
+function out = build_prot3b_package(readout_dir, out_dir, c)
+tag = c.cell;
+F = readtable(fullfile(readout_dir, [tag '_prot3b_frames.csv']), 'TextType', 'string', 'Delimiter', ',');
+B = readtable(fullfile(readout_dir, [tag '_prot3b_blocks.csv']), 'TextType', 'string', 'Delimiter', ',');
+[Pats, G, warn] = pats_from_frame_table(F, c.center_shift_px);
+n_frames = size(Pats, 3);
+dirs = new_package_dir(out_dir);
+pat = write_pattern(Pats, dirs.pat, 1, sprintf('prot3b_%dframes_4px_sites_mi9', n_frames), struct('source', 'prot3b_frames.csv', 'cell', tag));
+gray = pfn_sections(c.pretrial_s, 1, [], [], [], n_frames);
+pfn(1) = write_function(gray, 'pfn', 1, dirs.fn, sprintf('gray_%gs', c.pretrial_s), n_frames);
+nb = height(B);
+for b = 1:nb
+    frames = sscanf(char(B.frames(b)), '%d').';
+    if numel(frames) ~= B.n_flashes(b), error('run_session:build', 'Block %d: %d frames listed, n_flashes %d', b, numel(frames), B.n_flashes(b)); end
+    if any(frames < 2 | frames > n_frames), error('run_session:build', 'Block %d references a frame outside 2..%d', b, n_frames); end
+    func = pfn_sections(B.settle_s(b), 1, frames, B.flash_ms(b)/1000, B.gray_ms(b)/1000, n_frames);
+    if abs(numel(func)/500 - B.duration_s(b)) > 1e-6
+        error('run_session:build', 'Block %d: function lasts %g s, table says %g s', b, numel(func)/500, B.duration_s(b));
+    end
+    pfn(1+b) = write_function(func, 'pfn', 1+b, dirs.fn, sprintf('prot3b_block%02d_%s_%spA', b, char(B.phase(b)), tok(B.current_pA(b))), n_frames); %#ok<AGROW>
+end
+afn(1) = write_function(zeros(1, round(c.pretrial_s*1000)), 'afn', 1, dirs.ao, sprintf('zero_%gs', c.pretrial_s), n_frames);
+keyv = [B.duration_s, B.ao_volts];
+[uk, ~, ik] = unique(keyv, 'rows', 'stable');
+afn_of_block = zeros(nb, 1);
+for u = 1:size(uk, 1)
+    dur = uk(u, 1); v = uk(u, 2);
+    func = [v*ones(1, round((dur - c.ao_zero_tail_s)*1000)), zeros(1, round(c.ao_zero_tail_s*1000))];
+    pa = B.current_pA(find(ik == u, 1));
+    afn(1+u) = write_function(func, 'afn', 1+u, dirs.ao, sprintf('offset_%spA_%sV_%gs', tok(pa), tok(v), dur), n_frames); %#ok<AGROW>
+    afn_of_block(ik == u) = 1 + u;
+end
+rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
+rows(1) = row('pretrial', 1, 1, 1, c.pretrial_s);
+for b = 1:nb, rows(1+b) = row(sprintf('block %02d %s %+g pA', b, char(B.phase(b)), B.current_pA(b)), 1, 1+b, afn_of_block(b), B.duration_s(b)); end
+rows(nb+2) = row('posttrial', 1, 1, 1, c.pretrial_s);
+programmed = sum([rows.duration_s]);
+write_current_exp(out_dir, pat, pfn, afn);
+write_json(fullfile(dirs.rep, 'rows.json'), struct('rows', rows, 'cleanup', struct('pattern_id', 1, 'gray_pfn_id', 1, 'zero_afn_id', 1), 'programmed_s', programmed));
+bh = {'block_index', 'phase', 'requested_current_pA', 'ao_volts', 'settle_s', 'n_flashes', 'flash_ms', 'gray_ms', ...
+    'duration_s', 'programmed_start_s', 'position_function', 'ao_function', 'pattern', 'frames'};
+br = cell(nb, numel(bh)); eh = {'block_index', 'phase', 'requested_current_pA', 'event_index_in_block', 'pattern_frame', 'item', ...
+    'polarity', 'size_px', 'region', 's_px', 'v_px', 'square_row_start', 'square_row_end', 'square_col_start', 'square_col_end', ...
+    'square_center_x', 'square_center_y', 'flash_onset_s', 'flash_onset_programmed_s', 'flash_duration_s', 'gray_after_s'};
+er = {}; t = c.pretrial_s;
+for b = 1:nb
+    frames = sscanf(char(B.frames(b)), '%d').';
+    br(b, :) = {b, char(B.phase(b)), B.current_pA(b), B.ao_volts(b), B.settle_s(b), B.n_flashes(b), B.flash_ms(b), B.gray_ms(b), ...
+        B.duration_s(b), r6(t), pfn(1+b).stem, afn(afn_of_block(b)).stem, pat.stem, char(B.frames(b))};
+    for e = 1:numel(frames)
+        g = G(frames(e)); onset = r6(B.settle_s(b) + (e-1)*(B.flash_ms(b) + B.gray_ms(b))/1000);
+        er(end+1, :) = {b, char(B.phase(b)), B.current_pA(b), e, frames(e), g.item, g.polarity, g.size_px, g.region, g.s_px, g.v_px, ...
+            g.row_start, g.row_end, g.col_start, g.col_end, g.col_center, g.row_center, onset, r6(t + onset), B.flash_ms(b)/1000, B.gray_ms(b)/1000}; %#ok<AGROW>
+    end
+    t = t + B.duration_s(b);
+end
+write_csv(fullfile(dirs.rep, 'block_ledger.csv'), bh, br);
+write_csv(fullfile(dirs.rep, 'event_ledger.csv'), eh, er);
+cfg = package_config(c, 'Prot3b', readout_dir, {[tag '_prot3b_frames.csv'], [tag '_prot3b_blocks.csv']}, n_frames, programmed, warn);
+cfg.blocks = nb; cfg.ao_levels_pA = unique(B.current_pA).'; cfg.ao_volts_per_pA = 0.25;
+cfg.ao_shape = sprintf('level from t = 0 to %g s before the block end, then 0 (settle %g s at the level before the first flash)', c.ao_zero_tail_s, B.settle_s(1));
+cfg.frames = 'frame 1 background; 2..12 sites OFF; 13..23 sites ON; 24..26 Mi9 series 3-px OFF (as the read-out table)';
+write_json(fullfile(dirs.rep, 'config.json'), cfg);
+out = struct('folder', out_dir, 'n_frames', n_frames, 'n_blocks', nb, 'n_events', size(er, 1), 'programmed_s', programmed, ...
+    'pat_written', pat.pat_written, 'warnings', {warn}, 'rows', numel(rows));
+end
+
+% =========================================================================================
+% Protocol 4 package from the read-out tables
+% =========================================================================================
+function out = build_prot4_package(readout_dir, out_dir, c)
+tag = c.cell;
+F = readtable(fullfile(readout_dir, [tag '_prot4_frames.csv']), 'TextType', 'string', 'Delimiter', ',');
+Q = readtable(fullfile(readout_dir, [tag '_prot4_sequence.csv']), 'TextType', 'string', 'Delimiter', ',');
+[Pats, G, warn] = pats_from_frame_table(F, c.center_shift_px);
+n_frames = size(Pats, 3);
+dirs = new_package_dir(out_dir);
+pat = write_pattern(Pats, dirs.pat, 1, sprintf('prot4_%dframes_lattice_core_line_off', n_frames), struct('source', 'prot4_frames.csv', 'cell', tag));
+settle_s = 3;
+frames = Q.frame.'; flash_s = Q.flash_ms.'/1000; gray_s = Q.gray_ms.'/1000;
+if any(frames < 2 | frames > n_frames), error('run_session:build', 'Protocol 4 sequence references a frame outside 2..%d', n_frames); end
+func = pfn_sections(settle_s, 1, frames, flash_s, gray_s, n_frames);
+dur = r6(numel(func)/500);
+t_tab = Q.t_start_s.'; t_cum = [0, cumsum(flash_s(1:end-1) + gray_s(1:end-1))];
+if max(abs(t_tab - t_cum)) > 0.051, warn{end+1} = sprintf('t_start_s in the sequence table deviates from the cumulative durations by up to %.3f s', max(abs(t_tab - t_cum))); end
+gray = pfn_sections(c.pretrial_s, 1, [], [], [], n_frames);
+pfn(1) = write_function(gray, 'pfn', 1, dirs.fn, sprintf('gray_%gs', c.pretrial_s), n_frames);
+pfn(2) = write_function(func, 'pfn', 2, dirs.fn, sprintf('prot4_sequence_%dflashes_%gs', numel(frames), dur), n_frames);
+afn(1) = write_function(zeros(1, round(c.pretrial_s*1000)), 'afn', 1, dirs.ao, sprintf('zero_%gs', c.pretrial_s), n_frames);
+afn(2) = write_function(zeros(1, round(dur*1000)), 'afn', 2, dirs.ao, sprintf('zero_%gs', dur), n_frames);
+rows = struct('label', {}, 'pattern_id', {}, 'pfn_id', {}, 'afn_id', {}, 'duration_s', {}, 'deciseconds', {});
+rows(1) = row('pretrial', 1, 1, 1, c.pretrial_s);
+rows(2) = row('protocol 4 sequence', 1, 2, 2, dur);
+rows(3) = row('posttrial', 1, 1, 1, c.pretrial_s);
+programmed = sum([rows.duration_s]);
+write_current_exp(out_dir, pat, pfn, afn);
+write_json(fullfile(dirs.rep, 'rows.json'), struct('rows', rows, 'cleanup', struct('pattern_id', 1, 'gray_pfn_id', 1, 'zero_afn_id', 1), 'programmed_s', programmed));
+eh = {'event', 'pass', 'order', 'pattern_frame', 'item', 'polarity', 'size_px', 's_px', 'v_px', 'square_row_start', 'square_row_end', ...
+    'square_col_start', 'square_col_end', 'square_center_x', 'square_center_y', 'flash_onset_s', 'flash_onset_programmed_s', 'flash_duration_s', 'gray_after_s'};
+n = numel(frames); er = cell(n, numel(eh));
+for e = 1:n
+    g = G(frames(e)); onset = r6(settle_s + t_cum(e));
+    er(e, :) = {e, Q.pass(e), Q.order(e), frames(e), g.item, g.polarity, g.size_px, g.s_px, g.v_px, g.row_start, g.row_end, g.col_start, g.col_end, ...
+        g.col_center, g.row_center, onset, r6(c.pretrial_s + onset), flash_s(e), gray_s(e)};
+end
+write_csv(fullfile(dirs.rep, 'event_ledger.csv'), eh, er);
+write_csv(fullfile(dirs.rep, 'block_ledger.csv'), {'block_index', 'phase', 'requested_current_pA', 'n_flashes', 'duration_s', 'programmed_start_s', 'position_function', 'ao_function', 'pattern'}, ...
+    {1, 'protocol4', 0, n, dur, c.pretrial_s, pfn(2).stem, afn(2).stem, pat.stem});
+items = unique(Q.item); counts = struct();
+for k = 1:numel(items), counts.(matlab.lang.makeValidName(char(items(k)))) = sum(Q.item == items(k)); end
+cfg = package_config(c, 'Protocol 4', readout_dir, {[tag '_prot4_frames.csv'], [tag '_prot4_sequence.csv']}, n_frames, programmed, warn);
+cfg.passes = max(Q.pass); cfg.flashes = n; cfg.flashes_per_item = counts; cfg.settle_s = settle_s;
+cfg.periods = 'lattice 160 ms flash + 440 ms gray; core, line and OFF squares 160 ms + 240 ms (per row of the sequence table)';
+cfg.ao = sprintf('AO%d held at 0 V for the whole run', c.ao_channel);
+write_json(fullfile(dirs.rep, 'config.json'), cfg);
+out = struct('folder', out_dir, 'n_frames', n_frames, 'n_flashes', n, 'programmed_s', programmed, 'pat_written', pat.pat_written, ...
+    'warnings', {warn}, 'rows', numel(rows));
+end
+
+% =========================================================================================
+% shared builders
+% =========================================================================================
+function [Pats, G, warn] = pats_from_frame_table(F, shift)
+warn = {};
+n = max(F.frame);
+if ~isequal(sort(F.frame(:)).', 1:n), error('run_session:build', 'Frame numbers must be 1..N without gaps'); end
+bkg = 4; on = 15; off = 0;
+Pats = bkg * ones(48, 192, n);
+G = repmat(struct('frame', 0, 'item', 'background', 'polarity', 'gray', 'size_px', 0, 'region', '', 's_px', NaN, 'v_px', NaN, ...
+    'row_start', NaN, 'row_end', NaN, 'col_start', NaN, 'col_end', NaN, 'col_center', NaN, 'row_center', NaN), 1, n);
+has_region = ismember('region', F.Properties.VariableNames);
+for k = 1:height(F)
+    fr = F.frame(k); g = G(fr); g.frame = fr; g.item = txt(F.item(k)); g.polarity = txt(F.polarity(k)); g.size_px = F.size_px(k);
+    if has_region, g.region = txt(F.region(k)); end
+    if ismember('s_px', F.Properties.VariableNames), g.s_px = F.s_px(k); g.v_px = F.v_px(k); end
+    if strcmp(g.item, 'background') || isnan(F.col_start(k)), G(fr) = g; continue; end
+    c0 = F.col_start(k) + shift(1); r0 = F.row_start(k) + shift(2); sz = F.size_px(k);
+    c1 = c0 + sz - 1; r1 = r0 + sz - 1;
+    g.col_start = c0; g.col_end = c1; g.row_start = r0; g.row_end = r1; g.col_center = (c0 + c1)/2; g.row_center = (r0 + r1)/2;
+    cc = max(c0, 17):min(c1, 192); rr = max(r0, 1):min(r1, 48);
+    if numel(cc) < sz || numel(rr) < sz
+        warn{end+1} = sprintf('frame %d (%s %s) %s screen after shift [%d %d]', fr, g.item, g.polarity, tern(isempty(cc) || isempty(rr), 'off', 'clipped at'), shift(1), shift(2)); %#ok<AGROW>
+    end
+    if ~isempty(cc) && ~isempty(rr)
+        Pats(rr, cc, fr) = tern(strcmpi(g.polarity, 'ON'), on, off);
+    end
+    G(fr) = g;
+end
+end
+
+function func = pfn_sections(settle_s, bkg_frame, frames, flash_s, gray_s, n_frames) %#ok<INUSD>
+q = 0.002;
+chk = @(x, nm) assert(all(abs(x/q - round(x/q)) < 1e-9), 'run_session:build', '%s must be whole multiples of 2 ms', nm);
+chk(settle_s, 'settle');
+func = bkg_frame * ones(1, round(settle_s/q));
+if isempty(frames), return; end
+if isscalar(flash_s), flash_s = repmat(flash_s, size(frames)); end
+if isscalar(gray_s), gray_s = repmat(gray_s, size(frames)); end
+chk(flash_s, 'flash'); chk(gray_s, 'gray');
+nf = round(flash_s/q); ng = round(gray_s/q);
+parts = cell(1, 2*numel(frames));
+for k = 1:numel(frames)
+    parts{2*k-1} = frames(k) * ones(1, nf(k)); parts{2*k} = bkg_frame * ones(1, ng(k));
+end
+func = [func, parts{:}];
+end
+
+function d = new_package_dir(out_dir)
+if isfolder(out_dir) && ~isempty(dir(fullfile(out_dir, 'Patterns', '*.mat')))
+    stamp = char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
+    movefile(out_dir, [out_dir '_replaced_' stamp]);
+end
+d = struct('root', out_dir, 'pat', fullfile(out_dir, 'Patterns'), 'fn', fullfile(out_dir, 'Functions'), ...
+    'ao', fullfile(out_dir, 'Analog Output Functions'), 'rep', fullfile(out_dir, 'Reports'));
+for f = {'root', 'pat', 'fn', 'ao', 'rep'}, if ~isfolder(d.(f{1})), mkdir(d.(f{1})); end, end
+end
+
+function info = write_pattern(Pats, save_dir, id, name, extra)
+param = struct('ID', id, 'stretch', zeros(size(Pats, 3), 1), 'gs_val', 4, 'arena_pitch', 0, 'checker_layout', 0, ...
+    'px_rng', [1 48 17 192], 'generated_by', 'run_session', 'generated', iso_now());
+for f = fieldnames(extra).', param.(f{1}) = extra.(f{1}); end
+stem = sprintf('%04d_%s_G4', id, name);
+info = struct('id', id, 'stem', stem, 'mat', fullfile(save_dir, [stem '.mat']), 'pat', fullfile(save_dir, sprintf('pat%04d.pat', id)), ...
+    'pat_written', false, 'encoder', 'none', 'x_num', size(Pats, 3), 'y_num', 1, 'gs_val', 4, 'arena_pitch', 0);
+if exist('save_pattern_G4', 'file') == 2
+    save_pattern_G4(Pats, param, save_dir, name);
+    info.pat_written = isfile(info.pat); info.encoder = 'save_pattern_G4';
+    return
+end
+pattern = struct('Pats', Pats, 'x_num', size(Pats, 3), 'y_num', 1, 'gs_val', 4, 'stretch', param.stretch, 'param', param);
+if exist('maDisplayTools', 'class') == 8 || exist('maDisplayTools', 'file') == 2
+    try
+        enc = pattern; enc.gs_val = 16;
+        pattern.data = maDisplayTools.make_pattern_vector_g4(enc);
+        fid = fopen(info.pat, 'w'); fwrite(fid, pattern.data); fclose(fid);
+        info.pat_written = true; info.encoder = 'maDisplayTools.make_pattern_vector_g4';
+    catch err
+        warning('run_session:pattern', 'maDisplayTools encoder failed (%s); .pat not written', err.message);
+    end
+end
+save(info.mat, 'pattern', '-v7');
+end
+
+function info = write_function(func, type, id, save_dir, name, n_frames)
+stem = sprintf('%04d_%s_G4', id, name);
+param = struct('func', func, 'ID', id, 'frames', n_frames, 'gs_val', 4, 'type', type, 'dur', numel(func) / tern(strcmp(type, 'pfn'), 500, 1000), ...
+    'generated_by', 'run_session');
+if strcmp(type, 'pfn')
+    data = int16(func - 1); prefix = 'fun';
+else
+    assert(max(func) <= 10 && min(func) >= -10, 'run_session:build', 'AO function exceeds +/-10 V');
+    data = int16(adconvert(func)); prefix = 'ao';
+end
+funcname = sprintf('%s%04d', prefix, id);
+header = zeros(1, 512);
+header(1:4) = double(typecast(uint32(numel(data)*2), 'uint8'));
+header(5) = numel(funcname); header(6:5+numel(funcname)) = double(funcname);
+bytes = [uint8(header), typecast(data(:).', 'uint8')];
+param.size = numel(data) * 2;
+bin = fullfile(save_dir, [funcname '.' type]);
+fid = fopen(bin, 'w'); fwrite(fid, bytes, 'uint8'); fclose(fid);
+if strcmp(type, 'pfn'), pfnparam = param; save(fullfile(save_dir, [stem '.mat']), 'pfnparam', '-v7');
+else, afnparam = param; save(fullfile(save_dir, [stem '.mat']), 'afnparam', '-v7'); end
+info = struct('id', id, 'stem', stem, 'bin', bin, 'size', param.size, 'dur', param.dur, 'type', type);
+end
+
+function code = adconvert(volts)
+if exist('ADConvert', 'file') == 2, code = double(ADConvert(volts)); return; end
+a = (double(volts) + 10) / 20 * 65535 - 32768;
+code = min(max(sign(a) .* floor(abs(a) + 0.5), -32768), 32767);
+end
+
+function write_current_exp(out_dir, pat, pfn, afn)
+x = struct();
+x.pattern.pattNames = {[pat.stem '.mat']}; x.pattern.patternList = {sprintf('pat%04d.pat', pat.id)};
+x.pattern.x_num = pat.x_num; x.pattern.y_num = pat.y_num; x.pattern.gs_val = pat.gs_val; x.pattern.arena_pitch = pat.arena_pitch;
+x.pattern.num_patterns = 1;
+x.function.functionName = arrayfun(@(p) [p.stem '.mat'], pfn, 'UniformOutput', false);
+x.function.functionList = arrayfun(@(p) sprintf('fun%04d.pfn', p.id), pfn, 'UniformOutput', false);
+x.function.functionSize = num2cell([pfn.size]); x.function.numFunc = numel(pfn);
+if ~isempty(afn)
+    x.aoFunction.aoFunctionName = arrayfun(@(p) [p.stem '.mat'], afn, 'UniformOutput', false);
+    x.aoFunction.aoFunctionList = arrayfun(@(p) sprintf('ao%04d.afn', p.id), afn, 'UniformOutput', false);
+    x.aoFunction.aoFunctionSize = num2cell([afn.size]); x.aoFunction.numaoFunc = numel(afn);
+end
+x.totalDuration = sum([pfn.dur]);
+currentExp = x; %#ok<NASGU>
+save(fullfile(out_dir, 'currentExp.mat'), 'currentExp', '-v7');
+end
+
+function rows = rows_from_package(pkg)
+j = jsondecode(fileread(fullfile(pkg, 'Reports', 'rows.json')));
+rows = j.rows(:).';
+for k = 1:numel(rows)
+    rows(k).deciseconds = deciseconds(rows(k).duration_s, rows(k).label);
+end
+end
+
+function r = row(label, pattern_id, pfn_id, afn_id, duration_s)
+r = struct('label', label, 'pattern_id', pattern_id, 'pfn_id', pfn_id, 'afn_id', afn_id, 'duration_s', duration_s, ...
+    'deciseconds', deciseconds(duration_s, label));
+end
+
+function ds = deciseconds(dur, label)
+raw = double(dur) * 10; ds = round(raw);
+if abs(raw - ds) > 1e-6 || ds < 1 || ds > 65535
+    error('run_session:duration', '%s: %g s is not a whole number of deciseconds in 1..65535', label, dur);
+end
+end
+
+function cfg = package_config(c, name, readout_dir, tables, n_frames, programmed, warn)
+cfg = struct('schema', 'run_session/2', 'protocol', name, 'cell', c.cell, 'side', c.side, 'generated', iso_now(), ...
+    'readout_dir', readout_dir, 'source_tables', {tables}, 'center_shift_px', c.center_shift_px, 'center_source', getf(c, 'center_source', ''), ...
+    'pattern_frames', n_frames, 'programmed_duration_s', programmed, 'programmed_duration_min', r6(programmed/60), 'pretrial_s', c.pretrial_s, ...
+    'ao_channel', c.ao_channel, 'build_warnings', {warn}, 'dry_run', c.dry_run, ...
+    'conventions', 'arena col/row 1-based, row 1 at the top; background 4, ON 15, OFF 0; s + = toward the PD (trailing/proximal); v + = 90 deg clockwise from PD');
+for k = 1:numel(tables)
+    f = fullfile(readout_dir, tables{k});
+    if isfile(f), cfg.source_sha256.(matlab.lang.makeValidName(tables{k})) = sha256_file(f); end
+end
+end
+
+% =========================================================================================
+% Host configuration (live only)
+% =========================================================================================
+function S = apply_host_config_once(S, opts)
+if isfield(S.out.setup, 'host_config_applied') && S.out.setup.host_config_applied, return; end
+f = opts.host_config_file;
+if isempty(f) && exist('G4_Protocol_Designer_Settings', 'file') == 2
+    s = G4_Protocol_Designer_Settings(); f = char(s.Configuration_Filepath);
+end
+if isempty(f) || ~isfile(f)
+    say(S, 'Host configuration not edited (no file given / found); the Host keeps its current ADC rates.');
+    S.out.setup.host_config_applied = false; return
+end
+txt = fileread(f);
+if contains(txt, sprintf('\r\n')), eol = sprintf('\r\n'); else, eol = newline; end
+lines = strsplit(txt, eol, 'CollapseDelimiters', false);
+targets = {'^\s*Number of Rows\s*=', 'Number of Rows = 3'};
+for a = 0:3, targets(end+1, :) = {sprintf('^\\s*ADC%d Rate \\(Hz\\)\\s*=', a), sprintf('ADC%d Rate (Hz) = %d', a, opts.adc_rates_hz(a+1))}; end %#ok<AGROW>
+for k = 1:size(targets, 1)
+    hit = find(~cellfun(@isempty, regexp(lines, targets{k, 1}, 'once')));
+    if ~isscalar(hit), error('run_session:hostcfg', 'Host configuration %s: expected one line matching %s', f, targets{k, 1}); end
+    lines{hit} = targets{k, 2};
+end
+backup = fullfile(S.exp_folder, ['host_config_backup_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) '.ini']);
+copyfile(f, backup);
+write_text(f, strjoin(lines, eol));
+S.out.setup = struct('host_config_applied', true, 'host_config_file', f, 'backup', backup, 'adc_rates_hz', opts.adc_rates_hz);
+say(S, 'Host configuration %s: ADC rates set to %s (backup %s).', f, mat2str(opts.adc_rates_hz), backup);
+end
+
+% =========================================================================================
+% console, files, small helpers
+% =========================================================================================
+function print_checklist(S, selected)
+% 'ends ~' is the expected clock time of the end of each selected pending step if the session ran now
+if nargin < 2, selected = {S.steps.id}; end
+fprintf('\n  Session %s  (%s)%s  p2_mode %s\n', S.cell, S.exp_folder, tern(S.dry_run, '  [DRY RUN]', ''), S.p2_mode);
+fprintf('  %-3s %-9s %-11s %-8s %8s %7s  %-7s %s\n', '#', 'step', 'status', 'start', 'elapsed', 'est', 'ends', 'note');
+tot = 0; ahead = 0;
+for k = 1:numel(S.steps)
+    st = S.steps(k);
+    t0 = ''; if ~isempty(st.t_start), t0 = st.t_start(12:19); end
+    el = ''; if st.elapsed_s > 0, el = sprintf('%.1f min', st.elapsed_s/60); tot = tot + st.elapsed_s; end
+    mark = '.';
+    switch st.status
+        case 'done', mark = 'x';
+        case 'running', mark = '>';
+        case {'failed', 'interrupted'}, mark = '!';
+        case 'skipped', mark = '-';
+    end
+    ends = '';
+    if any(strcmp(st.status, {'pending', 'running', 'failed', 'interrupted'})) && ismember(st.id, selected)
+        ahead = ahead + st.est_min * 60; ends = ['~' char(datetime('now') + seconds(ahead), 'HH:mm')];
+    end
+    fprintf('  %s%-2d %-9s %-11s %-8s %8s %5.1f    %-7s %s\n', mark, k, st.id, st.status, t0, el, st.est_min, ends, st.note);
+end
+if ahead > 0
+    fprintf('  elapsed so far %.1f min; about %.0f min to go, finish ~%s\n\n', tot/60, ahead/60, char(datetime('now') + seconds(ahead), 'HH:mm'));
+else
+    fprintf('  elapsed so far %.1f min\n\n', tot/60);
+end
+end
+
+function q = answer_queue(q_in)
+% the scripted operator answers still to be used (option operator_answers)
+persistent Q
+if nargin, Q = q_in; end
+if isempty(Q), Q = {}; end
+q = Q;
+end
+
+function p = active_progress(p_in)
+% the session's SessionProgress, so that say() can put FLAG lines into the window
+persistent P
+if nargin, P = p_in; end
+p = P;
+end
+
+function S = step_overview(S, opts, k)
+% After a recorded step: SESSION_STEP_OVERVIEW of its log (Vm, drift, frames, current), shown and saved in
+% <exp_folder>/plots. Never stops the session: a failure is printed as a FLAG and the session goes on.
+id = S.steps(k).id;
+if ~ismember(id, {'dark30', 'p1', 'p1_confirm', 'p2', 'p2a', 'p2b', 'p3b', 'p4'}), return; end
+folder = ''; if isfield(S.out, id) && isfield(S.out.(id), 'folder'), folder = S.out.(id).folder; end
+if isempty(folder) || isempty(dir(fullfile(folder, 'Log Files', '**', '*.tdms')))
+    say(S, 'Overview %s: no TDMS log in %s%s', id, folder, tern(opts.dry_run, ' (dry run: the mock writes none)', ''));
+    return
+end
+if exist('session_step_overview', 'file') ~= 2 || exist('fast_tdms_folder2struct', 'file') ~= 2
+    say(S, 'FLAG overview %s skipped: session_step_overview / fast_tdms_folder2struct not on the path', id); return
+end
+try
+    png = fullfile(S.exp_folder, 'plots', sprintf('%02d_%s_overview.png', k, id));
+    O = session_step_overview(folder, 'Title', sprintf('%s  %d/%d  %s - %s', S.cell, k, numel(S.steps), id, S.steps(k).label), ...
+        'Png', png, 'Figure', opts.show_figures, 'Name', sprintf('Step %s overview', id));
+    S.out.(id).overview = O.summary; S.out.(id).overview.png = png;
+    say(S, 'Overview %s (%.1f s): %s', id, O.seconds, O.line);
+    if abs(O.summary.vm_drift_mV) > 5, say(S, 'FLAG %s: Vm drifted %+.1f mV over the step', id, O.summary.vm_drift_mV); end
+catch err
+    say(S, 'FLAG overview %s failed: %s', id, err.message);
+end
+if ~opts.analysis_plots || ~ismember(id, {'p3b', 'p4'}), return; end
+fn = struct('p3b', 'analyze_prot3b', 'p4', 'analyze_p4');
+if exist(fn.(id), 'file') ~= 2, say(S, 'FLAG analysis %s skipped: %s not on the path', id, fn.(id)); return; end
+try
+    png = fullfile(S.exp_folder, 'plots', sprintf('%02d_%s_analysis.png', k, id));
+    A = feval(fn.(id), folder, 'Cell', S.cell, 'Png', png, 'Figure', opts.show_figures, 'Name', sprintf('Step %s analysis', id));
+    S.out.(id).analysis = A.summary; S.out.(id).analysis.png = png;
+    if strcmp(id, 'p3b')
+        say(S, 'Analysis p3b (%.1f s): R_gray %.2f GOhm; pairs kept %d/%d; dR ON trailing %.2f, OFF center %.2f, ON center %.2f GOhm', A.seconds, ...
+            A.summary.R_gray_GOhm, A.summary.pairs_kept, A.summary.pairs, A.summary.ON_trailing_dR_300_500, A.summary.OFF_center_dR_100_200, A.summary.ON_center_dR_150_250);
+        if A.summary.pairs_kept < A.summary.pairs / 2, say(S, 'FLAG p3b: only %d of %d pairs pass the baseline QC', A.summary.pairs_kept, A.summary.pairs); end
+    else
+        say(S, 'Analysis p4 (%.1f s): lattice ON peak %.1f mV; Gaussian sigma %.1f x %.1f px at s %+.1f v %+.1f; trailing hyperpolarization to s %+.1f px; passes kept %d/%d', ...
+            A.seconds, A.summary.lattice_ON_peak_mV, A.summary.gauss_sigma_s_px, A.summary.gauss_sigma_v_px, A.summary.gauss_s0_px, A.summary.gauss_v0_px, ...
+            A.summary.trailing_extent_px, A.summary.passes_kept, A.summary.passes);
+        if A.summary.passes_kept < A.summary.passes, say(S, 'FLAG p4: %d of %d passes within 5 mV of pass 1', A.summary.passes_kept, A.summary.passes); end
+    end
+    if ~opts.show_figures, close(A.figure); end
+catch err
+    say(S, 'FLAG analysis %s failed: %s', id, err.message);
+end
+end
+
+function say(S, fmt, varargin)
+msg = sprintf(fmt, varargin{:});
+line = sprintf('[%s] %s', char(datetime('now', 'Format', 'HH:mm:ss')), msg);
+fprintf('%s\n', line);
+if contains(msg, 'FLAG') || contains(msg, 'FAILED')
+    p = active_progress();
+    if ~isempty(p) && isvalid(p), p.note(line); end
+end
+try
+    fid = fopen(fullfile(S.exp_folder, 'session_log.txt'), 'a'); fprintf(fid, '%s %s\n', char(datetime('now', 'Format', 'yyyy-MM-dd')), line); fclose(fid);
+catch
+end
+end
+
+function r = ask(opts, prompt, default)
+% Used only for the operator's physical hand-offs (holding current; Conductor results folder; the arena
+% re-aim). Scripted answers (option operator_answers) are taken first, in order.
+q = answer_queue();
+if ~isempty(q)
+    r = q{1}; answer_queue(q(2:end));
+    fprintf('%s[scripted: %s]\n', prompt, tern(isempty(r), 'Enter', r));
+    if isempty(r), r = default; end
+    return
+end
+if opts.auto_accept
+    fprintf('%s[auto: %s]\n', prompt, tern(isempty(default), 'Enter', default));
+    r = default; return
+end
+r = input(prompt, 's');
+if isempty(r), r = default; end
+end
+
+function write_csv(pathname, header, rows)
+fid = fopen(pathname, 'w'); if fid < 0, error('run_session:io', 'Could not write %s', pathname); end
+c = onCleanup(@() fclose(fid));
+fprintf(fid, '%s\n', strjoin(header, ','));
+for i = 1:size(rows, 1)
+    parts = cell(1, size(rows, 2));
+    for j = 1:size(rows, 2)
+        v = rows{i, j};
+        if ischar(v) || isstring(v), parts{j} = char(v);
+        elseif islogical(v), parts{j} = lower(mat2str(v));
+        elseif isempty(v) || (isscalar(v) && isnan(v)), parts{j} = '';
+        elseif v == fix(v) && abs(v) < 1e15, parts{j} = sprintf('%d', v);
+        else, parts{j} = sprintf('%.15g', v); end
+        if strcmp(parts{j}, '-0'), parts{j} = '0'; end
+        if any(parts{j} == ',' | parts{j} == '"' | parts{j} == ' ')
+            parts{j} = ['"' strrep(parts{j}, '"', '""') '"'];
+        end
+    end
+    fprintf(fid, '%s\n', strjoin(parts, ','));
+end
+end
+
+function write_json(pathname, s)
+write_text(pathname, [jsonencode(s, 'PrettyPrint', true) newline]);
+end
+
+function write_text(pathname, text)
+fid = fopen(pathname, 'w'); if fid < 0, error('run_session:io', 'Could not write %s', pathname); end
+fwrite(fid, unicode2native(char(text), 'UTF-8'), 'uint8'); fclose(fid);
+end
+
+function h = sha256_file(pathname)
+fid = fopen(pathname, 'r'); bytes = fread(fid, inf, '*uint8'); fclose(fid);
+md = java.security.MessageDigest.getInstance('SHA-256'); md.update(bytes);
+h = lower(reshape(dec2hex(typecast(md.digest(), 'uint8'), 2).', 1, []));
+end
+
+function v = getf(s, name, default)
+if isstruct(s) && isfield(s, name) && ~isempty(s.(name)), v = s.(name); else, v = default; end
+end
+
+function t = tok(x)
+t = strrep(strrep(sprintf('%g', x), '-', 'minus'), '.', 'p');
+if x > 0, t = ['plus' t]; end
+end
+
+function x = r6(x)
+x = round(x * 1e6) / 1e6;
+end
+
+function s = txt(x)
+if isstring(x) && (isempty(x) || ismissing(x)), s = ''; else, s = char(x); end
+end
+
+function t = iso_now()
+t = char(datetime('now', 'Format', 'yyyy-MM-dd''T''HH:mm:ss'));
+end
+
+function v = tern(c, a, b)
+if c, v = a; else, v = b; end
+end

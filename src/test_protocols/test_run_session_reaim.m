@@ -12,13 +12,15 @@
 %   C  row 3.5: 21 rows wanted = 26.25 deg, clamped to +20 (and to +12 from a stage already at +8)
 %   W  the RF moved the wrong way (mock read-out finds nothing in the window) -> stop; reaim_reset with the
 %      other sign asks again and confirms
+%   G  the gate after the confirmation (figure saved; c repeats the check, a re-aims again, s stops and resumes)
 %   F  a full dry run of all steps (two-stage mode) with a top-edge peak: every step done or skipped as expected
+% Tests run_session_v2 (the re-aim version); run_session.m is the unchanged fallback.
 % Writes only under tempdir.
 
 here = fileparts(mfilename('fullpath'));
 repo = fileparts(fileparts(here));
 addpath(genpath(fullfile(repo, 'src')));
-assert(startsWith(which('run_session'), repo), 'run_session is not this repository''s (%s)', which('run_session'));
+assert(startsWith(which('run_session_v2'), repo), 'run_session is not this repository''s (%s)', which('run_session_v2'));
 proto = 'C:\matlabroot\G4_Protocols\nested_RF_stimulus\protocols\bkg4';
 pkg_rhs = fullfile(proto, 'RHS2', 'protocol1_10kHz_4reps_12px_6px_RHS2_5sbkg_200msfl_150msint_81_180_07-10-25_15-47-98');
 assert(isfolder(pkg_rhs), 'not found: %s', pkg_rhs);
@@ -38,7 +40,7 @@ fprintf('6-px ON frames at col %g: row 3.5 -> %d, 9.5 -> %d, 27.5 -> %d, 39.5 ->
 % square nearest the true RF after the move (TRUE_ROW_AFTER), or nothing when that is outside the window
 mock = @(first_row, true_row_after) @(f, o, pat) mock_readout(f, pat, P6, on6, col, first_row, true_row_after);
 base = {'dry_run', true, 'side', 'R', 'p1_folder', pf, 'overview_plots', false, 'steps', {'p1_peak', 'reaim', 'p1_confirm'}};
-run1 = @(name, fn, varargin) run_session(fullfile(scratch, name), base{:}, 'cell', name, 'p1_readout_fn', fn, varargin{:});
+run1 = @(name, fn, varargin) run_session_v2(fullfile(scratch, name), base{:}, 'cell', name, 'p1_readout_fn', fn, varargin{:});
 
 %% N. no edge
 S = run1('n_center', mock(27.5, NaN), 'operator_answers', {'should not be used'});
@@ -107,6 +109,26 @@ check(strcmp(status(S, 'p1_confirm'), 'done') && S.out.reaim.suggested_deg == -1
     any(strcmp({S.decisions.decision}, 'reset')) && S.out.p1_peak.aim_xy(2) == 21.5, ...
     'W: reaim_reset with reaim_sign -1: asked again (-18.5 deg), confirmed at row 21.5');
 
+%% G. the gate after the confirmation: the figure, 'c' repeats the check, 'a' re-aims again from the found peak, 's' stops
+S = run1('g_repeat', mock(9.5, 9.5 + 18.5/1.25), 'operator_answers', {'', '', 'c', ''});
+D = S.decisions; g = D(strcmp({D.decision}, 'gate'));
+check(strcmp(status(S, 'p1_confirm'), 'done') && sum(strcmp({D.decision}, 'confirm')) == 2 && numel(g) == 2 && strcmp(g(1).flags, 'operator_repeat') && ...
+    contains(g(2).outcome, 'continue') && S.out.p1_peak.before_reaim.aim_xy(2) == 9.5 && S.out.p1_peak.aim_xy(2) == 21.5 && ...
+    isfile(S.out.p1_confirm.png) && numel(dir(fullfile(S.exp_folder, 'plots', 'p1_confirm_reaim_*.png'))) >= 1, ...
+    'G: c at the gate repeats the check (2 confirmations, Protocol 1 peak kept as before), then Enter continues; the confirmation figure is saved');
+S = run1('g_again', mock(3.5, 3.5 + 4.8), 'stage_angle_deg', 14, 'operator_answers', {'', '', 'a'});
+D = S.decisions; rot = D(strcmp({D.decision}, 'rotation'));
+check(strcmp(D(find(strcmp({D.decision}, 'gate'), 1)).flags, 'operator_reaim_again') && numel(rot) == 2 && contains(rot(1).outcome, 'moved +6 deg') && ...
+    strcmp(rot(2).flags, 'stage_at_limit') && contains(rot(2).outcome, '+20') && S.out.p1_peak.aim_xy(2) == 9.5 && S.out.p1_peak.before_reaim.aim_xy(2) == 3.5 && ...
+    strcmp(status(S, 'p1_confirm'), 'skipped'), ...
+    'G: a at the gate (found row 9.5, still near the edge): re-aim again from there with the stage at +20 -> no rotation left, flagged; the found peak kept');
+S = run1('g_stop', mock(9.5, 9.5 + 18.5/1.25), 'operator_answers', {'', '', 's'});
+st = S.steps(strcmp({S.steps.id}, 'p1_confirm'));
+check(strcmp(st.status, 'interrupted') && contains(st.note, 'stopped by the operator') && S.out.p1_peak.aim_xy(2) == 9.5 && ...
+    strcmp(last_decision(S, 'gate').flags, 'operator_stop'), 's at the gate: the session stops at p1_confirm, the peak as before the check');
+S = run1('g_stop', mock(9.5, 9.5 + 18.5/1.25));
+check(strcmp(status(S, 'p1_confirm'), 'done') && S.out.p1_peak.aim_xy(2) == 21.5, 'G: the same command resumes: the check runs again, Enter continues');
+
 %% F. full dry run, two-stage mode, top-edge peak (Protocol 2 placeholders; read-out tables of JY1008)
 analysis_repo = fullfile(fileparts(repo), 'ephys-standard-analysis');
 tools_out = fullfile(analysis_repo, 'tools', 'out');
@@ -119,7 +141,7 @@ else
     for nm = {'stage1.json', 'stage2_sequence.csv', 'stage2_bars.csv'}, copyfile(fullfile(tools_out, ['TUTL_20251023a_' nm{1}]), fullfile(rd, ['JY1008_' nm{1}])); end
     P1 = load(fullfile(p1_package, 'Patterns', dir(fullfile(p1_package, 'Patterns', '0002_*.mat')).name)); Pl = double(P1.pattern.Pats);
     fl = find(arrayfun(@(f) is_square(Pl(:, :, f), 9.5), 2:size(Pl, 3)), 1) + 1;    % a 6-px square at rows 7..12
-    S = run_session(fullfile(scratch, 'f_full'), 'dry_run', true, 'cell', 'JY1008', 'side', 'L', 'p1_package', p1_package, 'peak_frame', fl, ...
+    S = run_session_v2(fullfile(scratch, 'f_full'), 'dry_run', true, 'cell', 'JY1008', 'side', 'L', 'p1_package', p1_package, 'peak_frame', fl, ...
         'readout_dir', rd, 'analysis_repo', analysis_repo, 'overview_plots', false);
     ids = {S.steps.id}; sts = {S.steps.status};
     check(isequal(ids, {'dark30', 'p1', 'p1_peak', 'reaim', 'p1_confirm', 'p2a', 'readout1', 'p2b', 'readout', 'build', 'p3b', 'p4'}) && all(strcmp(sts, 'done')) && ...

@@ -20,8 +20,7 @@ function S = Auto_T4_v1(tag, side, varargin)
 %     3. the arena viewer (arena_viewer) in a second MATLAB, unless one is already running for this folder;
 %        it closes itself 30 s after the session finishes, or when its window is closed;
 %     4. run_session with the default two-stage sequence: dark30 (then the one prompt: type the holding
-%        current), p1, p1_peak (rapid_p1_peak), reaim and p1_confirm (only when the peak is near the top or
-%        bottom edge: the prompt to rotate the stage, then a short Protocol 1 at the new position), p2a (the package generated from the peak as
+%        current), p1, p1_peak (rapid_p1_peak), p2a (the package generated from the peak as
 %        generate_protocol2 makes it, in C:\matlabroot\G4_Protocols\nested_RF_protocol2\data), readout1,
 %        p2b, readout, build, p3b, p4, the arena dark at the end. About 41 min.
 %

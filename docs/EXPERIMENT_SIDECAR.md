@@ -1,7 +1,23 @@
-# Experiment sidecar: supervising an Auto_T4_v1 session
+# Experiment sidecar: supervising an Auto_T4_v2 (or Auto_T4_v1) session
 
 For a Claude session running on the rig PC (REISERLAB-EPHYS) next to Jin Yong's experiment. Written 29 Oct 2026
 from the first real sessions (JY1028a/b, 28 Oct). **Claude: read all of this before you do anything.**
+
+## 0. Which version is running
+
+There are two launchers. Ask Jin Yong which one, or read the first line of the `Auto_T4_v*_<time>.log` in the session folder.
+
+| | **Auto_T4_v2** (from 29 Oct: with the arena re-aim) | **Auto_T4_v1** (the fallback, the last working version) |
+|---|---|---|
+| checkout | `C:\matlabroot\GitHub\nested_RF_stimulus_reaim` (branch `feat/arena-reaim`) | `C:\matlabroot\GitHub\nested_RF_stimulus_session_ui` (branch `feat/session-progress-plots`) |
+| command | `addpath('C:\matlabroot\GitHub\nested_RF_stimulus_reaim\src\protocol_generation'); Auto_T4_v2('<TAG>', 'L')` | `addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation'); Auto_T4_v1('<TAG>', 'L')` |
+| sequencer | `run_session_v2.m`: 12 steps (`reaim` and `p1_confirm` after `p1_peak`, section 5a) | `run_session.m`: 10 steps (no re-aim) |
+| MATLAB log | `Auto_T4_v2_<time>.log` | `Auto_T4_v1_<time>.log` |
+
+Everything below is written for both: where it says `Auto_T4_v1`, `run_session.m` or `_session_ui`, read
+`Auto_T4_v2`, `run_session_v2.m` and `_reaim` for a v2 session. Steps 4 and 5 of the table in section 5 exist only in v2;
+for v1, steps 6–12 are numbered 4–10. A session folder is resumed by the version that started it (`Auto_T4_v2`
+refuses a v1 folder). If v2 fails in a way that cannot be resumed, the fallback is `Auto_T4_v1` on a **new tag**.
 
 ## 1. Your role
 
@@ -50,10 +66,15 @@ plainly when something needs action, and say nothing extra when everything is no
    ```
    Expected: `check_only: all checks passed; nothing run.`, the branch `feat/session-progress-plots`, Host config
    `ADC [0 10000 10000 0], 3 rows`. Any other result: tell Jin Yong before the cell is patched.
+   For v2, the same with `C:\matlabroot\GitHub\nested_RF_stimulus_reaim\...` and `Auto_T4_v2`. Expect the branch
+   `feat/arena-reaim`.
 4. Jin Yong then runs, in their own MATLAB, after break-in in current clamp at 0 pA:
    ```matlab
-   addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation')
-   Auto_T4_v1('<TAG>', 'L')
+   addpath('C:\matlabroot\GitHub\nested_RF_stimulus_reaim\src\protocol_generation'); Auto_T4_v2('<TAG>', 'L')
+   ```
+   The fallback (the last working version, no re-aim):
+   ```matlab
+   addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation'); Auto_T4_v1('<TAG>', 'L')
    ```
 
 ## 4. What to read during the session
@@ -114,7 +135,7 @@ Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice wide
 | 2 | `p1`: Protocol 1 coarse map | 6.2 min | `Overview p1`: Vm (−67 mV on 28 Oct). `FLAG p1: Vm drifted ±D mV` fires above 5 mV of drift. |
 | 3 | `p1_peak` | seconds | `DECISION p1_peak/aim: frame F at col/row [c r]`. Uses the 6-px grid peak when ≥ 2 mV, else the 12-px grid (FLAG). Below 2 mV on both grids the session **stops** (`FLAG session stopped at p1_peak: Protocol 1 peak ... below the floor ...`): no usable response, so Jin Yong decides (new cell, or a `'peak_frame'` override). |
 | 4 | `reaim`: arena re-aim check | seconds; 1–2 min when it fires | Normal for most cells: `DECISION reaim/edge_check: no re-aim: A px above and B px below the peak (>= 14)`, and step 5 is skipped (`Step p1_confirm skipped: no re-aim`). **When it fires** (`DECISION reaim/edge_check: RE-AIM: peak D px from the top/bottom edge (< 14)`), the session **waits for Jin Yong** at a boxed `RE-AIM THE ARENA` prompt in their MATLAB (see section 5a). That wait is expected, not a hang. |
-| 5 | `p1_confirm`: quick Protocol 1 at the re-aimed RF | about 0.6 min, only after a rotation | `DECISION p1_confirm/confirm: GOOD: found col/row [c r], predicted [c r] (row offset ±x px); Protocol 2 is aimed there` is a good confirmation. `FLAG DECISION p1_confirm/confirm: CHECK: ...` lists what was off (section 5a). |
+| 5 | `p1_confirm`: quick Protocol 1 at the re-aimed RF, then the figure and Jin Yong's choice | about 0.7 min plus the choice, only after a rotation | `DECISION p1_confirm/confirm: GOOD: found col/row [c r], predicted [c r] (row offset ±x px); Protocol 2 is aimed there` is a good confirmation. `FLAG DECISION p1_confirm/confirm: CHECK: ...` lists what was off (section 5a). |
 | 6 | `p2a`: Protocol 2 stage 1, the sweeps | 8.3 min | `Overview p2a`. Watch for the drift FLAG. After a re-aim, the `Protocol 2 package generated for peak frame F ... aimed at col/row [c r]` line must show the **confirmed** position, not the Protocol 1 one. |
 | 7 | `readout1` | seconds | `DECISION readout1/placement_pd: placement PD X deg (rule mean ...)`. Normal: rule `mean`, 28 and 56 °/s within a few degrees (1.1° on 28 Oct). Rule `28_only` means they differ by more than 10°: note it. `usable_pd: stage 2 plays the 22 bars` is normal. `FLAG stage 2 fallback: all 88 bars as today (N rows, M min)` makes step 8 last M min instead of 2: tell Jin Yong. |
 | 8 | `p2b`: stage 2, 22 bars × 3 | 2.2 min | |
@@ -127,7 +148,7 @@ Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice wide
 After every step, report: the step, its duration against the table, Vm, and any DECISION or FLAG in plain words.
 Example: *"p2a done, 8.3 min, Vm −70 mV, steady. Placement PD 271°, both speeds agree. Stage 2 next (2 min)."*
 
-### 5a. The arena re-aim (steps 4 and 5; added 29 Oct, branch `feat/arena-reaim`)
+### 5a. The arena re-aim (steps 4 and 5; Auto_T4_v2 only, added 29 Oct)
 
 **Why.** Protocol 2 crops its bars and flashes to 30 px around the Protocol 1 peak, and the Prot3b sites reach
 14 px from it. A peak within 14 px of the top or bottom edge (on the 6-px grid: rows 3.5, 9.5, 39.5, 45.5) would
@@ -149,6 +170,21 @@ wait at this prompt is normal. Do not report it as a hang.
   before and after, the sign convention, and the predicted new col/row. Flags: `moved X deg, suggested Y`,
   `clamped ...`, `operator_skip`, `stage_at_limit`.
 - `p1_confirm/confirm`: the predicted and found col/row, the offset, and ΔV before and after.
+
+- `p1_confirm/gate`: Jin Yong's choice after the figure (below).
+
+**The check** takes about 40 s: 20 squares × ON/OFF × 2 repeats at 200 + 150 ms, plus 2 s of gray before and
+after. Then a figure opens and is saved as `plots\p1_confirm_reaim_<time>.png`. It shows the arena with the window's
+ON ΔV map, the dotted 14-px margins, the Protocol 1 peak before the move (gray square), the predicted position
+(red ×) and the found peak (green ○ when GOOD, orange when CHECK). Jin Yong then chooses in the command window:
+- **Enter**: continue, with Protocol 2 aimed at the found peak.
+- **c**: repeat the check, same window, stage unmoved.
+- **a**: re-aim again from the found peak, with the stage where it is. Offered only when the found peak is still
+  near the edge.
+- **s**: stop the session. The same command resumes it: the check runs again, then the same choice.
+
+`Running again from step ...` in the log follows `c` or `a`. The status table then shows the step pending again.
+Waiting at this choice is normal.
 
 The confirmation package and its event ledger are in `<TAG>\p1_confirm\`. The Protocol 1 peak from before the move
 is kept in `session_state.json` under `out.p1_peak.before_reaim`.
@@ -225,8 +261,8 @@ read-outs), Protocol 4 (lattice peak, passes kept, the trailing hyperpolarizatio
     other, and every block within 5 mV of the first block of its current (agreed 29 Oct). The hand-over's
     wording would reject every pair.
   - **Protocol 4 lattice window:** now s −14…+18 px (it was −12…+16; widened 29 Oct, about 1.1 min more).
-  - **Arena re-aim** (29 Oct, section 5a). Parameters and the rig test: `docs/notes/ARENA_REAIM_20261029.md` in
-    `nested_RF_stimulus`.
+  - **Arena re-aim** (29 Oct, Auto_T4_v2, section 5a). Parameters and the rig test:
+    `docs\notes\ARENA_REAIM_20261029.md` in the `_reaim` checkout.
 - Conventions: 1 px = 1.25°; s is positive toward the PD (the trailing side); v is 90° clockwise from the PD.
 
 ## 10. Where the code is
@@ -253,6 +289,9 @@ there.
 | progress window, arena viewer | `protocol_generation\SessionProgress.m`, `arena_viewer.m` |
 | mock controller for the dry runs | `protocol_generation\SessionMockController.m` |
 | tests (the ones section 11 runs) | `test_protocols\test_run_session_dry.m`, `test_run_session_replay_jy.m`, `test_run_session_p1_aim.m`, `test_session_plots.m` (`test_run_session_joint.m` only runs on a Mac) |
+| **v2 only**: the launcher and the sequencer | `protocol_generation\Auto_T4_v2.m`, `run_session_v2.m` (a copy of `run_session.m` with the re-aim; the function names above are the same in it) |
+| **v2 only**: `reaim`, `p1_confirm` | `run_session_v2.m`: `step_reaim`, `step_p1_confirm` (the gate after the figure), `build_p1_confirm_package`, `plot_reaim_confirm`, `reaim_reset` |
+| **v2 only**: tests | `test_run_session_reaim.m`, `test_run_session_v2_dry.m` (run them with the four above, which test v1's `run_session.m`) |
 
 Outside this repository (read only, never edit, even in a fix):
 - `C:\matlabroot\G4_Display_Tools\`: arena control (`PControl_Matlab\controller\PanelsController.m`) and the
