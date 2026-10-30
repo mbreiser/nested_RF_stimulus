@@ -20,7 +20,7 @@ td:first-child { width: 29%; font-weight: 600; }
 </style></head><body>
 
 <h1>Auto_T4_v2: automatic cell session, one-page guide</h1>
-<p class="sub">REISERLAB-EPHYS, MATLAB R2023a. One command runs everything after break-in, about 45 min (3 min more when the arena is re-aimed). Version of 30 Oct 2026: <b>v1 plus the arena re-aim</b> for receptive fields near the top or bottom of the screen; the re-aim check now scans the whole Protocol 1 area and rejects noise.</p>
+<p class="sub">REISERLAB-EPHYS, MATLAB R2023a. One command runs everything after break-in, about 46 min (3 min more when the arena is re-aimed). Version of 30 Oct 2026: <b>v1 plus the arena re-aim</b> for receptive fields near the top or bottom of the screen; the re-aim check now scans the whole Protocol 1 area and rejects noise.</p>
 
 <h2>Before the first cell of the day (once)</h2>
 <pre>addpath('C:\matlabroot\GitHub\nested_RF_stimulus_reaim\src\protocol_generation')
@@ -36,7 +36,7 @@ Auto_T4_v2('JY1030a', 'L')</pre></li>
 <li>A second MATLAB opens the <b>arena viewer</b>. A <b>status window</b> lists the steps (12), the clock times and any FLAG.</li>
 <li>After <b>30 s of dark</b>, MATLAB asks for the holding current: <b>set it on the amplifier, type the value in pA, press Enter.</b> Do not change it after this.</li>
 <li>Protocol 1 and its peak run. <b>Only if the peak is near the top or bottom edge</b>, the re-aim prompt comes (green box below). Otherwise nothing is asked.</li>
-<li>Then it runs hands-off: Protocol 2 stage 1 (8 min), read-out, stage 2, read-out and placement, Prot3b (8 min), Protocol 4 (15 min). At the end the arena goes <b>dark</b>.</li>
+<li>Then it runs hands-off: Protocol 2 stage 1 (8 min), read-out, stage 2 (3 min, 30 bars), read-out and placement, Prot3b (8 min), Protocol 4 (16 min). At the end the arena goes <b>dark</b>.</li>
 </ol>
 
 <div class="new"><b>Re-aim the arena (only when asked).</b> A box <b>RE-AIM THE ARENA</b> gives the peak, its distance to the edge, the angle to turn the base, for example <code>Rotate the stage by +18.5 deg (from +0 to +18.5)</code>, and where the RF should land.
@@ -45,7 +45,7 @@ Auto_T4_v2('JY1030a', 'L')</pre></li>
 <li>Type the angle you <b>actually</b> moved, then Enter (Enter alone = the suggested angle).</li>
 <li>An ON scan of the <b>whole Protocol 1 area</b> finds the RF at the new angle (<b>about 1.6 min</b>). A figure then shows the map: gray square = peak before, red × = predicted, circle = found (green GOOD, orange CHECK = on the scan's edge, red = NO RESPONSE). The title gives the mV, the <b>SNR</b> (needs 4) and the ratio to the peak before (needs 0.5).</li>
 <li>GOOD or CHECK, choose: <b>Enter</b> = continue (Protocol 2 is aimed at the found peak); <b>c</b> = repeat the scan; <b>a</b> = re-aim again from there (offered when still near the edge); <b>s</b> = stop.</li>
-<li><b>NO RESPONSE</b> (noise only; Protocol 2 is <b>not</b> aimed there), choose: <b>c</b> = repeat the scan; <b>r</b> = turn the base back to the old reading, then the re-aim is asked again; <b>p</b> = turn the base back and go on with the old peak; <b>s</b> = stop.</li>
+<li><b>NO RESPONSE</b> (noise only; Protocol 2 is <b>not</b> aimed there), choose: <b>c</b> = repeat the scan; <b>r</b> = turn the base back to the old reading, then the re-aim is asked again; <b>p</b> = turn the base back and go on with the old peak; <b>u</b> = <b>use this peak anyway</b> (a clear peak, only weaker: Protocol 2 is aimed there, flagged); <b>s</b> = stop.</li>
 </ol>
 After <b>s</b> with no response: turn the base back to the old reading and resume with <code>'reaim_reset', true</code> (add <code>'reaim_sign', -1</code> if it turned the wrong way). If the base is not at 0 at the start, add <code>'stage_angle_deg', &lt;reading&gt;</code>.</div>
 

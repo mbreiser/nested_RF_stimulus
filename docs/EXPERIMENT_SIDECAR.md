@@ -224,6 +224,9 @@ After NO RESPONSE (Enter is not a choice here):
 - **r**: rotate the stage back to the reading before the move (the prompt names it, then Enter), and the re-aim is
   asked again.
 - **p**: rotate the stage back to that reading (then Enter) and go on with the Protocol 1 peak from before the move.
+- **u**: use the scan's peak anyway. Jin Yong judges it a real response from the figure, for example a clear peak that
+  is weaker than before. Protocol 2 is aimed there and the choice is flagged (`p1_confirm/gate: operator_accept`;
+  `out.p1_peak.accepted_by_operator`). Added 30 Oct: a clear peak should never cost the cell.
 - **s**: stop. To be asked the re-aim again on resume: rotate back and add `'reaim_reset', true` (and
   `'reaim_sign', -1` if the base turned the wrong way). The same command without it repeats the scan.
 
@@ -245,8 +248,9 @@ The confirmation package and its event ledger are in `<TAG>\p1_confirm\`, and th
 - `still near the edge`: the rotation was not enough, for example because it was clamped.
 - **NO RESPONSE** with `SNR x < 4` and/or `peak x mV < y mV (r x the ... before the move; needs 0.5 x)`. Either the
   cell is going (check the Vm in `Overview p1_confirm`), or the RF went off the screen. Tell Jin Yong the SNR and the
-  ratio. Usually the best choice is **p** (the cell is still recorded at the old angle, with the edge peak), or
-  **r** to try the rotation again.
+  ratio. If the figure shows a clear peak (only weaker than before, for example), **u** uses it. Otherwise the
+  usual choice is **p** (the cell is still recorded at the old angle, with the edge peak), or **r** to try the
+  rotation again.
 
 **Signs the cell is going** (run 2 on 28 Oct is the example): Vm climbing step after step (−41 → −25 mV), drift
 FLAGs on consecutive steps, R_gray falling (13 → 5.4 GΩ), Prot3b pairs and Protocol 4 passes rejected. Say so
@@ -258,7 +262,7 @@ early and give the numbers. Whether to continue is Jin Yong's call.
 |---|---|---|
 | `Step X FAILED: <msg>` | the session stopped; the arena is cleaned up | Quote the message and the stack from `Auto_T4_v1_*.log`. **The same command resumes** (`Auto_T4_v1('<TAG>', 'L')`): run_session re-runs the failed step and continues. If the same step fails twice, or the message points at the code (an index or frame error, like `stage-2 frames outside 2..89` on 28 Oct), do not resume blindly: find the cause in the code (section 10), record it as a bug (section 7), and offer Jin Yong a fix (section 11). |
 | `FLAG session stopped at <step>: ...` (e.g. after `p1_peak`) | run_session stopped on purpose (the step is `interrupted`), e.g. no usable Protocol 1 response | New cell, or a `'peak_frame'` override, at Jin Yong's choice. |
-| `FLAG DECISION p1_confirm/confirm: NO RESPONSE ...`, then the choice c / r / p / s | the re-aim scan has no real response (SNR or amplitude too low): the RF left the screen, or the cell is going | Section 5a. Give the SNR and the ratio. `p` goes on at the old angle with the old peak; `r` tries the rotation again. |
+| `FLAG DECISION p1_confirm/confirm: NO RESPONSE ...`, then the choice c / r / p / u / s | the re-aim scan has no real response by the QC (SNR or amplitude too low): the RF left the screen, the cell is going, or the response is real but weaker | Section 5a. Give the SNR and the ratio. `u` uses a clear peak anyway (flagged); `p` goes on at the old angle with the old peak; `r` tries the rotation again. |
 | `FLAG session stopped at p1_confirm: no response in the re-aim scan; stopped by the operator ...` | Jin Yong chose `s` after NO RESPONSE | Rotate the base back, then resume with `'reaim_reset', true` (and `'reaim_sign', -1` if the base turned the wrong way). |
 | `Unrecognized function or variable 'Auto_T4_v1'`, or `Auto_T4_v1: ... is on feat/arena-reaim` | the `_session_ui` folder is not first on the path | Section 0: type the `_session_ui` `addpath` line, then `Auto_T4_v1`. If in doubt, restart MATLAB first. |
 | `run_session:controller`, `startDisplay did not confirm`, Host errors | rig communication problem | Stop. Do not suggest workarounds on the hardware. Record it. Resuming is Jin Yong's decision. |

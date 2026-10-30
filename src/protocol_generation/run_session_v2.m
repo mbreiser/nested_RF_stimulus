@@ -33,7 +33,8 @@ function S = run_session_v2(exp_folder, varargin)
 %              only when it is a response: SNR >= reaim_min_snr and >= reaim_min_frac x the peak before the
 %              move (decision confirm: GOOD, CHECK when on the scan's outer row or column, or NO RESPONSE). A
 %              figure, then the operator's choice (decision gate): Enter / c repeat / a re-aim again / s stop;
-%              after NO RESPONSE: c repeat / r rotate back and redo / p rotate back, old peak / s stop
+%              after NO RESPONSE: c repeat / r rotate back and redo / p rotate back, old peak / u use the scan's
+%              peak anyway (the operator judges it real; flagged) / s stop
 %     p2a      Protocol 2 stage 1: the five sweep blocks, 16 directions, 3 repeats (about 7.3 min)
 %     readout1 read-out call 1: placement PD (rule: mean of the 28 and 56 deg/s vectors within 10 deg,
 %              otherwise the 28 deg/s vector with a warning; > 5 deg sets a flag), the two bar sets, the
@@ -772,13 +773,18 @@ S.out.p1_confirm.found_xy = nxy; S.out.p1_confirm.offset_px = d; S.out.p1_confir
 S.out.p1_confirm.ratio = ratio; S.out.p1_confirm.verdict = verdict; S.out.p1_confirm.good = strcmp(verdict, 'GOOD');
 if qc_applied, say(S, 'Re-aim scan ON peak: frame %s at col/row %s, %s (before the move: %.1f mV).', mat2str(fr), mat2str(nxy, 4), qtxt, pre_mV); end
 pk_xy = double(getf(pk, 'aim_xy', getf(pk, 'xy', [NaN NaN])));
-if resp
-    before = pk; if isfield(before, 'before_reaim'), before = rmfield(before, 'before_reaim'); end
-    if ~isfield(S.out, 'reaim_first_peak') || isempty(S.out.reaim_first_peak), S.out.reaim_first_peak = before; end
+if in_scan
+    % the scan's peak as the new Protocol 1 peak: used when it is a response, or when the operator accepts it
+    % anyway after NO RESPONSE (choice u)
+    first_pk = pk; if isfield(first_pk, 'before_reaim'), first_pk = rmfield(first_pk, 'before_reaim'); end
+    if isfield(S.out, 'reaim_first_peak') && ~isempty(S.out.reaim_first_peak), first_pk = S.out.reaim_first_peak; end
     new = pk;
     new.frame = fr; new.aim_xy = nxy; new.aim_polarity = pol; new.peak_mV = mv;
     qx = getf(Q, 'xy', []); if numel(qx) == 2, new.xy = double(qx(:).'); else, new.xy = nxy; end
-    new.polarity = pol; new.pattern = B.pattern; new.source = src; new.before_reaim = S.out.reaim_first_peak; new.reaim_deg = A.actual_deg;
+    new.polarity = pol; new.pattern = B.pattern; new.source = src; new.before_reaim = first_pk; new.reaim_deg = A.actual_deg;
+end
+if resp
+    S.out.reaim_first_peak = first_pk;
     S.out.p1_peak = new;
     outcome = sprintf('%s: found col/row %s (%s), predicted %s; Protocol 2 is aimed there', verdict, mat2str(nxy, 4), qtxt, mat2str(pred, 4));
 else
@@ -807,9 +813,11 @@ else
         '    c      repeat the scan (the stage where it is, %+g deg)\n' ...
         '    r      rotate the stage back to %+g deg, then redo the re-aim (it is asked again)\n' ...
         '    p      rotate the stage back to %+g deg, then go on with the Protocol 1 peak from before the move (col/row %s)\n' ...
+        '%s' ...
         '    s      stop the session here\n'], mv, mat2str(nxy, 4), snr, opts.reaim_min_snr, ratio, pre_mV, opts.reaim_min_frac, ...
-        A.stage_after_deg, back, back, mat2str(pk_xy, 4));
-    valid = {'c', 'r', 'p', 's'};
+        A.stage_after_deg, back, back, mat2str(pk_xy, 4), ...
+        tern(in_scan, sprintf('    u      use this peak anyway (col/row %s; you judge it a real response): Protocol 2 aimed there, flagged\n', mat2str(nxy, 4)), ''));
+    valid = {'c', 'r', 'p', 's'}; if in_scan, valid{end+1} = 'u'; end
     dflt = tern(opts.auto_accept, 's', '');
 end
 r = 'x';
@@ -821,7 +829,7 @@ end
 if ~ismember(r, valid), r = 's'; end
 grule = ['the operator, after the confirmation figure: a response -> Enter continue, c repeat the scan, a re-aim again (when still ' ...
     'near the edge), s stop; NO RESPONSE -> c repeat the scan, r rotate back and redo the re-aim, p rotate back and go on with ' ...
-    'the peak from before the move, s stop'];
+    'the peak from before the move, u use the scan''s peak anyway (the operator judges it real; flagged), s stop'];
 gin = struct('choice', r, 'verdict', verdict, 'found_xy', nxy, 'peak_mV', mv, 'snr_mean', snr, 'ratio_to_pre_move', ratio, ...
     'stage_deg', A.stage_after_deg, 'stage_before_deg', back);
 switch r
@@ -835,6 +843,12 @@ switch r
         S.out.stage_now_deg = A.stage_after_deg;
         S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('re-aim again from col/row %s (stage at %+g deg)', mat2str(nxy, 4), A.stage_after_deg), false, 'operator_reaim_again');
         S.redo_from = 'reaim';
+    case 'u'
+        S.out.reaim_first_peak = first_pk;
+        new.source = [src ' (NO RESPONSE by the QC, accepted by the operator)']; new.accepted_by_operator = true;
+        S.out.p1_peak = new; S.out.p1_confirm.accepted_by_operator = true;
+        S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('use the peak anyway (%s): Protocol 2 aimed at col/row %s', qtxt, mat2str(nxy, 4)), ...
+            true, 'operator_accept');
     case {'r', 'p'}
         ask(opts, sprintf('Rotate the stage back to %+g deg on its scale, then press Enter: ', back), '');
         S.out.p1_peak = pk; S.out.stage_now_deg = back;

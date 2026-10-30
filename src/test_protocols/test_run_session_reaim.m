@@ -11,7 +11,8 @@
 %   Q  the QC (30 Oct 2026): noise only as JY1030a (above the 2 mV floor) -> NO RESPONSE; a small response
 %      with little noise fails the amplitude test; a weak real RF passes; a peak on the scan's outer row ->
 %      CHECK; a large offset from the prediction -> GOOD with a geometry flag; the NO RESPONSE choices p
-%      (rotate back, the old peak), r (rotate back, redo the re-aim), c (repeat), an invalid answer
+%      (rotate back, the old peak), r (rotate back, redo the re-aim), c (repeat), an invalid answer, u (a clear
+%      but weaker peak used anyway, flagged)
 %   B  bottom edge (row 39.5) with reaim_sign -1: suggested +18.5 deg (the sign flips the rotation, not the
 %      direction of the RF move: 15 rows up)
 %   K  the operator skips ('s'): flagged, no confirmation, the peak unchanged
@@ -171,6 +172,15 @@ S = run1('q_enter', mock(9.5, NaN, 'noise', 2, 'first_mV', 9.8), 'operator_answe
 D = S.decisions; g = D(strcmp({D.decision}, 'gate'));
 check(numel(g) == 2 && strcmp(g(1).flags, 'operator_repeat') && strcmp(g(2).flags, 'operator_stop') && sum(strcmp({D.decision}, 'confirm')) == 2, ...
     'Q8: NO RESPONSE: an invalid answer is asked again; c repeats the scan; s stops');
+
+% Q9: a clear but weaker peak (3.2 of 8 mV, SNR well over 4): NO RESPONSE by the amplitude test; u uses it anyway
+S = run1('q_accept', mock(9.5, 9.5 + 18.5/1.25, 'amp', 3.2, 'noise', 0.3), 'operator_answers', {'', '', 'u'});
+c = last_decision(S, 'confirm'); g = last_decision(S, 'gate'); pk = S.out.p1_peak;
+check(contains(c.outcome, 'NO RESPONSE') && strcmp(g.flags, 'operator_accept') && g.fallback && strcmp(status(S, 'p1_confirm'), 'done') && ...
+    pk.aim_xy(2) == 21.5 && pk.accepted_by_operator && contains(pk.source, 'accepted by the operator') && pk.before_reaim.aim_xy(2) == 9.5 && ...
+    S.out.p1_confirm.accepted_by_operator && contains(g.outcome, 'use the peak anyway'), ...
+    sprintf('Q9: NO RESPONSE (%.2f x the peak before), u: the scan''s peak used anyway at row %g, flagged operator_accept, the old peak kept', ...
+    jsondecode(c.inputs).ratio_to_pre_move, pk.aim_xy(2)));
 
 %% W. wrong sign: the RF went off the top edge; stop, then reset with the other sign
 name = 'w_wrong_sign';

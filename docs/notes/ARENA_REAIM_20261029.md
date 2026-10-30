@@ -41,8 +41,10 @@ copy of `Auto_T4_v1.m`, which refuses to start outside `feat/session-progress-pl
    Protocol 1 ON peak before the move, and ≥ `p1_peak_floor_mV`; (c) not on the scan's outer row or column. (a)
    and (b) pass and (c) passes: GOOD. (a) and (b) pass, (c) fails: CHECK, still used. (a) or (b) fails: NO
    RESPONSE. Protocol 2 is not aimed there, and the choices are c (repeat), r (rotate back, redo the re-aim), p
-   (rotate back, go on with the peak from before the move), s (stop). The SNR and the ratio are in
-   `decisions.json`, in the figure's title and in the prompt.
+   (rotate back, go on with the peak from before the move), u (use the scan's peak anyway; added later on 30 Oct at
+   M. Reiser's request, so that a clear but weaker peak never costs the cell; flagged `operator_accept`), s (stop).
+   The SNR and the ratio are in `decisions.json`, in the figure's title and in the prompt. The prediction never
+   decides anything: a response is accepted wherever the scan finds it.
 3. The path: `Auto_T4_v1.m` is removed from this branch, so the fallback can only run from `_session_ui`.
    `Auto_T4_v2` restores the path at every exit (return, error, Ctrl-C) without any `_reaim` folder, the typed
    `addpath` included. Checked on 30 Oct: after `Auto_T4_v2(..., 'check_only', true)` and after an error, no `_reaim`
@@ -97,7 +99,9 @@ affected, and nothing is asked.
      scan again).
    - after NO RESPONSE: **c** repeat the scan; **r** rotate the stage back to the reading before the move (then
      Enter), and the re-aim is asked again; **p** rotate back (then Enter) and go on with the peak from before the
-     move; **s** stop (the message gives the stage reading and `'reaim_reset', true`). Enter is not a choice here.
+     move; **u** use the scan's peak anyway (the operator judges it real; Protocol 2 aimed there, flagged
+     `operator_accept`, `out.p1_peak.accepted_by_operator`); **s** stop (the message gives the stage reading and
+     `'reaim_reset', true`). Enter is not a choice here.
 
    After `c`, `a` or `r`, the main loop sets those steps back to pending and runs them again; the status table shows
    this.
@@ -173,6 +177,7 @@ of raising the stop error inside the step. Raising it inside the step lost the d
    `DECISION p1_confirm/confirm: GOOD: found col/row ... (X mV, SNR Y (needs 4), Z x the peak before the move
    (needs 0.5)), predicted ...`. Geometry flags (offset, opposite way) do not stop anything: note them.
 9. **NO RESPONSE** (Protocol 2 is not aimed anywhere yet): look at the figure and at the Vm in `Overview p1_confirm`.
+   - A clear peak, only weaker than before (or just under the SNR line): `u` uses it.
    - The cell is going: `s`, or `p` to record the rest at the old angle.
    - The RF probably left the screen (wrong sign): `r`, rotate back when asked, and at the new prompt turn the other
      way and type the angle moved with its sign. Or `s`, then resume with `'reaim_reset', true, 'reaim_sign', <the
