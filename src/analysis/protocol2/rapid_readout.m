@@ -70,6 +70,9 @@ function R = rapid_readout(session_folder, varargin)
 %     'Stage2Test' emulate a stage-2 session from a complete one: keep only the
 %                bar flashes of the 22 bars of the two placement-frame sets
 %                (false). The center must equal the full-session center.
+%     'LatticeTrail' the PD-side (trailing) edge s of the Protocol 4 lattice
+%                window, px (18; Auto_T4_v2 passes 22 since 30 Oct 2026); the
+%                leading edge stays -14 and v +/-8
 %     'AgreeDeg' the 28 and 56 deg/s vectors are averaged when they differ by
 %                at most this (10, as the Python script at commit c372a6e; the
 %                26 Oct decision text says 5); 'FlagDeg' flags a disagreement
@@ -103,7 +106,7 @@ function R = rapid_readout(session_folder, varargin)
     [~, sid] = fileparts(session_folder);
     opts = struct('Cell', sid, 'Out', fullfile(session_folder, 'rapid_readout'), 'Seed', [], 'Metrics', '', ...
                   'Figure', true, 'SavePng', true, 'Verbose', false, 'Stage1Test', false, 'Stage2Test', false, 'AgreeDeg', 10, 'FlagDeg', 5, ...
-                  'Stage2', '', 'P1Peak', [], 'P1Summary', '');
+                  'Stage2', '', 'P1Peak', [], 'P1Summary', '', 'LatticeTrail', 18);
     for k = 1:2:numel(varargin), opts.(varargin{k}) = varargin{k+1}; end
     if startsWith(opts.Out, '/Volumes/reiserlab')
         error('rapid_readout:ReadOnlyShare', 'the Janelia share is read-only: give an ''Out'' folder on the local disk');
@@ -213,7 +216,8 @@ function R = rapid_readout(session_folder, varargin)
     G = struct('C', bs.center_xy, 'e_pd', bs.e_pd, 'e_or', bs.e_or, 'screen', struct('col_min', 17, 'col_max', 192, 'row_min', 1, 'row_max', 48));
     G.center = to_arena(G, 0, 0);
     if A.tutl_available, C_tutl = tutl_center(A, S); else, C_tutl = [NaN NaN]; end
-    [kept, grid] = lattice(G);
+    LW = lattice_window(opts.LatticeTrail);
+    [kept, grid] = lattice(G, LW);
     [sites, notes] = place_sites(G);
     for i = 1:numel(sites)
         st = sites(i);
@@ -286,7 +290,7 @@ function R = rapid_readout(session_folder, varargin)
         'bar_sets', rmfield(bs, {'center_xy', 'e_pd', 'e_or', 'perp_peak', 'par_peak', 'perp_under', 'par_under'}), 'm6_pd_1based_tutl', A.m6_pd, 'm6_or_1based_tutl', A.m6_or, ...
         'static_vm_mV', round(double(A.static_vm), 2), 'rf_center_col_row_1based', [round(cc, 2), round(cr, 2)], ...
         'centroid_offset_px', struct('s', round(A.centroid_pd, 2), 'v', round(A.centroid_or, 2)), ...
-        'window_px', lattice_window(), 'core_px', struct('s_half', 6, 'v_half', 4), 'lattice', grid, 'deg_per_px', 1.25, ...
+        'window_px', LW, 'core_px', struct('s_half', 6, 'v_half', 4), 'lattice', grid, 'deg_per_px', 1.25, ...
         'sites', sites, 'site_warnings', {notes}, ...
         'prot3b', struct('n_blocks', numel(p3_blocks), 'total_s', round(p3_total, 1), 'timing', struct('flash_ms', 160, 'gray_ms', 440, 'settle_s', 3.0, 'hold_flash_ms', 500, 'hold_period_ms', 1000, 'hold_reps', 6), ...
                          'order_blocks_1_20_pA', p3b_order(), 'order_blocks_21_26_pA', [-1 0 1 1 0 -1], 'ao_volts_per_pA', 0.25, 'n_frames', numel(p3_frames)), ...
@@ -312,7 +316,7 @@ function R = rapid_readout(session_folder, varargin)
     if opts.Figure
         P = struct('cell', tag, 'pd', pp.pd_placement, 'pd_vector', pp.pd_vector_28, 'pd_vector_56', pp.pd_vector_56, 'pd_snapped', A.pd, 'center', G.center, 'center_xy', G.C, 'e_pd', G.e_pd, 'e_or', G.e_or, ...
                    'bar_cx', S.cx + 1, 'bar_cy', S.cy + 1, 'g_pd', bs.g_perp, 'g_or', bs.g_par, 'lattice', kept, 'sites', sites, 'p4_frames', p4_frames, ...
-                   'window', lattice_window(), 'nb', S.nb);
+                   'window', LW, 'nb', S.nb);
         if ~isempty(p1), P.others = struct('name', 'protocol1_ON_peak', 'col', p1(1), 'row', p1(2)); end
         P.profiles.pd = struct('pos', bs.perp_pos_px, 'peak', bs.perp_peak, 'under', bs.perp_under, 'm6', bs.perp_m6_1based, 'set', bs.g_perp);
         P.profiles.or = struct('pos', bs.par_pos_px, 'peak', bs.par_peak, 'under', bs.par_under, 'm6', bs.par_m6_1based, 'set', bs.g_par);
@@ -759,15 +763,18 @@ function r = pyround(x)
     r = round(x); h = (x - floor(x)) == 0.5; r(h) = 2 * round(x(h) / 2);
 end
 
-function W = lattice_window()
+function W = lattice_window(s_trail)
 % The Protocol 4 4-px lattice window in the PD frame (px). The hand-over's s -12..+16 widened by one 2-px
 % step at each end on 29 Oct 2026 (JY1028a: the trailing hyperpolarization reached s +14.5 and the leading
 % one the s -12 edge); tools/rapid_prot2_locations.py still uses -12..+16, so its lattice tables differ.
-W = struct('s_lead', -14, 's_trail', 18, 'v_half', 8);
+% S_TRAIL (option 'LatticeTrail', default 18) moves the PD-side edge only: Auto_T4_v2 passes 22 since
+% 30 Oct 2026 (JY1028a: the PD-side hyperpolarization still -0.7 mV at s +16).
+if nargin < 1 || isempty(s_trail), s_trail = 18; end
+W = struct('s_lead', -14, 's_trail', s_trail, 'v_half', 8);
 end
 
-function [kept, grid] = lattice(G)
-    sz = 4; step = 2; half = 1.5; W = lattice_window();
+function [kept, grid] = lattice(G, W)
+    sz = 4; step = 2; half = 1.5;
     c = to_arena(G, 0, 0); col0 = pyround(c(1) - half); row0 = pyround(c(2) - half);
     reach = ceil(max([abs(W.s_lead), W.s_trail, W.v_half]) * sqrt(2) / step) + 2;
     kept = struct([]); n_off = 0;

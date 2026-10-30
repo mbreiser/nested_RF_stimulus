@@ -86,7 +86,7 @@ for j = 1:3
     end
     yline(ax, 0, 'k:', 'HandleVisibility', 'off'); xline(ax, 0, 'k:', 'HandleVisibility', 'off');
     if ~isempty(yregion)
-        yl = ylim(ax); patch(ax, [-20 20 20 -20], [yl(1) yl(1) 0 0], [0.88 0.92 1], 'EdgeColor', 'none', 'HandleVisibility', 'off');
+        yl = ylim(ax); patch(ax, [-30 30 30 -30], [yl(1) yl(1) 0 0], [0.88 0.92 1], 'EdgeColor', 'none', 'HandleVisibility', 'off');   % +-30: covers the +22 lattice
         to_back(ax); ylim(ax, yl);
         if A.trailing_extent_px > 0, xline(ax, A.trailing_extent_px, '--', 'Color', [0.05 0.15 0.6], 'HandleVisibility', 'off'); end
     end
@@ -96,7 +96,7 @@ for j = 1:3
     title(ax, pr{j, 4}, 'FontSize', 9);
 end
 ax = nexttile(tl); hold(ax, 'on');
-p1 = P(1); want = [4 8 12 16]; cc = [0.85 0.2 0.15; 0.95 0.55 0.1; 0.6 0.4 0.8; 0.15 0.4 0.85];
+p1 = P(1); want = [4 8 12 16 20]; cc = [0.85 0.2 0.15; 0.95 0.55 0.1; 0.6 0.4 0.8; 0.15 0.4 0.85; 0.05 0.55 0.45];   % s +20 only with the +22 lattice
 for i = 1:numel(want)
     [d, r] = min(abs(p1.x - want(i))); if d > 1, continue; end
     plot(ax, t, p1.trace(r, :), 'Color', cc(i, :), 'LineWidth', 1.2, 'DisplayName', sprintf('s %+d (late %.1f mV)', p1.x(r), p1.late(r)));

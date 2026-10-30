@@ -1,15 +1,20 @@
-% TEST_RUN_SESSION_V2_WIDEN  Auto_T4_v2's wider stage-2 bar flashes (n_flank 7) (rig PC, 30 Oct 2026).
+% TEST_RUN_SESSION_V2_WIDEN  Auto_T4_v2's wider stage-2 bar flashes (n_flank 7) and +22 px Protocol 4 lattice (rig PC, 30 Oct 2026).
 %
 % Why: JY1028a's PD-side hyperpolarization runs from s +5 to beyond +16 px (still -0.7 mV at +16); the 11 stage-2
-% bars per set cover only +/-10 px. v2 passes p2_n_flank 7 (15 bars per set, +/-14 px, 120 frames); the shared
-% files keep the old values as defaults, so Auto_T4_v1 is
+% bars per set cover only +/-10 px and the lattice ended at s +18. v2 passes p2_n_flank 7 (15 bars per set, +/-14
+% px, 120 frames) and lattice_trail_px 22; the shared files keep the old values as defaults, so Auto_T4_v1 is
 % unchanged (test_run_session_replay_jy checks v1's generated package byte for byte against the 23 Oct one).
-%   D  the defaults: generate_bar_flash_pos_fns with n_flank 5 draws randperm(88) with 89 for frame 1, as before
+%   D  the defaults: generate_bar_flash_pos_fns with n_flank 5 draws randperm(88) with 89 for frame 1, as before;
+%      rapid_readout without 'LatticeTrail' uses s -14..+18
 %   G  run_session_v2 generates the stage-1 package from the 23 Oct Protocol 1 peak (dry run): the FLASHES pattern
 %      has 121 frames (8 x 15 bars + background), the six bar-flash functions flash each of the 120 bars once; the
 %      sweep conditions and their durations are those of the 23 Oct package
 %   S  read-out call 1 on the 23 Oct log with the generated 120-frame FLASHES pattern: 30 stage-2 bars, 15 per set,
 %      one orientation each; the stage-2 package: 30 bars x 2 classes x 3 repeats = 180 flashes, its duration
+%   F  full mode, run_session_v2's own rapid_readout call: 'LatticeTrail' 22 reaches the read-out (window s -14..+22)
+%   L  read-out call 2 on the 23 Oct log (Stage2Test) with 18 and 22: lattice positions, off-screen drops, Protocol 4 time
+%   J  JY1028a (28 Oct, two-stage: the stage-1 package and <session>\p2b) with 18 and 22: the same, on the cell that
+%      motivated the change (copies of its folders; the originals are only read)
 % Writes only under tempdir. Needs G4_Display_Tools on the path.
 
 here = fileparts(mfilename('fullpath'));
@@ -42,6 +47,9 @@ fm = dir(fullfile(d5, '*Rep1*.mat')); fm = fm(contains({fm.name}, '80ms'));
 q = load(fullfile(fm(1).folder, fm(1).name)); v = q.pfnparam.val(2:2:end);
 check(isequal(v, want) && q.pfnparam.frames == 89 && numel(dir(fullfile(d5, '*.mat'))) == 6, ...
     'D: n_flank 5: the 80 ms Rep1 function is randperm(88) with 89 for frame 1, 89 frames, as before 30 Oct');
+L18 = readout_json(p2, fullfile(scratch, 'ro_default'), tag, {'Stage2Test', true});
+check(L18.window_px.s_lead == -14 && L18.window_px.s_trail == 18 && L18.window_px.v_half == 8, ...
+    sprintf('D: rapid_readout without LatticeTrail: window s %d..%+d, v +-%d (as before)', L18.window_px.s_lead, L18.window_px.s_trail, L18.window_px.v_half));
 
 %% G. run_session_v2 generates the stage-1 package with n_flank 7
 gen_root = fullfile(scratch, 'generated');
@@ -90,6 +98,40 @@ check(p2b.n_bars == 30 && p2b.n_flashes == 180 && cfg.n_bars == 30 && size(qq.pa
 t2_22 = 2 + 3 * (2 * 3 + 22 * (1.0 + 0.5)) + 2;                  % the same package with 22 bars (v1): settle 3 s per function
 fprintf('  INFO  stage 2: %.1f s with 30 bars vs %.1f s with 22 (%+.1f s, %+.2f min)\n', t2, t2_22, t2 - t2_22, (t2 - t2_22) / 60);
 
+%% F. full mode: run_session_v2's own read-out call passes LatticeTrail 22
+expF = fullfile(scratch, 'cell_F_full');
+SF = run_session_v2(expF, 'dry_run', true, 'cell', tag, 'side', 'L', 'p2_mode', 'full', 'p1_folder', p1, 'p2_folder', p2, ...
+    'overview_plots', false, 'steps', {'p1_peak', 'p2', 'readout', 'build'});
+LF = jsondecode(fileread(fullfile(expF, 'readout', [tag '_locations.json'])));
+check(strcmp(SF.out.readout.method, 'rapid_readout.m') && LF.window_px.s_trail == 22 && LF.window_px.s_lead == -14 && LF.window_px.v_half == 8, ...
+    sprintf('F: run_session_v2''s rapid_readout call: window s %d..%+d, v +-%d; Protocol 4 package %.1f min', LF.window_px.s_lead, LF.window_px.s_trail, LF.window_px.v_half, SF.out.build.p4.programmed_s / 60));
+
+%% L. the 23 Oct cell: lattice 18 vs 22
+L22 = readout_json(p2, fullfile(scratch, 'ro_22'), tag, {'Stage2Test', true, 'LatticeTrail', 22, 'Figure', true});
+lat = readtable(fullfile(scratch, 'ro_22', [tag '_lattice.csv']), 'TextType', 'string', 'Delimiter', ',');
+check(L22.window_px.s_trail == 22 && all(lat.s_px > -15 & lat.s_px < 23 & abs(lat.v_px) < 9) && (max(lat.s_px) > 21 || L22.lattice.n_dropped_off_screen > 0) && ...
+    L22.lattice.n_kept > L18.lattice.n_kept && isfile(fullfile(scratch, 'ro_22', [tag '_locations.png'])), ...
+    sprintf('L: 23 Oct cell (PD %.0f deg): lattice %d positions at s %.1f..%+.1f (%d off screen) vs %d with +18 (%d off); Protocol 4 %.1f vs %.1f min (%+.2f)', ...
+    L22.pd_placement, L22.lattice.n_kept, min(lat.s_px), max(lat.s_px), L22.lattice.n_dropped_off_screen, L18.lattice.n_kept, L18.lattice.n_dropped_off_screen, ...
+    L22.protocol4.total_s / 60, L18.protocol4.total_s / 60, (L22.protocol4.total_s - L18.protocol4.total_s) / 60));
+
+%% J. JY1028a: lattice 18 vs 22 on the cell that motivated it
+if isfolder(jy_p2a) && isfolder(jy_p2b)
+    ja = fullfile(scratch, 'jy1028a_p2a'); jb = fullfile(scratch, 'jy1028a_p2b'); mkdir(ja); mkdir(jb);
+    b0 = dir(fullfile(jy_p2b, '**', '*')); a0 = dir(fullfile(jy_p2a, '**', '*'));
+    copyfile(jy_p2a, ja); copyfile(jy_p2b, jb);
+    J18 = readout_json(ja, fullfile(scratch, 'jy18'), 'JY1028a', {'Stage2', jb, 'LatticeTrail', 18});
+    J22 = readout_json(ja, fullfile(scratch, 'jy22'), 'JY1028a', {'Stage2', jb, 'LatticeTrail', 22, 'Figure', true});
+    jl = readtable(fullfile(scratch, 'jy22', 'JY1028a_lattice.csv'), 'TextType', 'string', 'Delimiter', ',');
+    check(J22.window_px.s_trail == 22 && J22.lattice.n_kept >= J18.lattice.n_kept && isequal(J22.rf_center_col_row_1based, J18.rf_center_col_row_1based), ...
+        sprintf('J: JY1028a (PD %.0f deg, center col/row %s): +22 lattice %d positions (%d off screen) at s up to %+.1f; +18: %d (%d off); Protocol 4 %.1f vs %.1f min (%+.2f)', ...
+        J22.pd_placement, mat2str(J22.rf_center_col_row_1based(:).'), J22.lattice.n_kept, J22.lattice.n_dropped_off_screen, max(jl.s_px), ...
+        J18.lattice.n_kept, J18.lattice.n_dropped_off_screen, J22.protocol4.total_s / 60, J18.protocol4.total_s / 60, (J22.protocol4.total_s - J18.protocol4.total_s) / 60));
+    b1 = dir(fullfile(jy_p2b, '**', '*')); a1 = dir(fullfile(jy_p2a, '**', '*'));
+    check(isequal([b0.datenum], [b1.datenum]) && isequal([a0.datenum], [a1.datenum]) && numel(b0) == numel(b1) && numel(a0) == numel(a1), 'J: the JY1028a folders are unchanged');
+else
+    fprintf('  SKIP  J: JY1028a folders not found\n');
+end
 close all force
 fprintf('\n%d check(s) failed. Output in %s\n', NFAIL, scratch);
 
@@ -100,6 +142,12 @@ function widen_readout(call, p2w, tag, out_dir, S)
     old = dir(fullfile(p2w, 'Patterns', '*FLASHES*.mat')); new = dir(fullfile(S.out.p2a.folder, 'Patterns', '*FLASHES*.mat'));
     copyfile(fullfile(new.folder, new.name), fullfile(old.folder, old.name));      % the recorded name, the generated content
     rapid_readout(p2w, 'Cell', tag, 'Out', out_dir, 'Figure', false, 'Stage1Test', true, 'P1Peak', double(S.out.p1_peak.xy(:).'));
+end
+
+function J = readout_json(folder, out, tag, extra)
+    args = [{'Cell', tag, 'Out', out, 'Figure', false}, extra];
+    rapid_readout(folder, args{:});
+    J = jsondecode(fileread(fullfile(out, [tag '_locations.json'])));
 end
 
 function check(cond, msg)

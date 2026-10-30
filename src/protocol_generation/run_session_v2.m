@@ -48,8 +48,8 @@ function S = run_session_v2(exp_folder, varargin)
 %              to the Protocol 1 peak and the tables are shifted there, flagged
 %     build    Prot3b and Protocol 4 packages from the tables
 %     p3b      Prot3b: 26 blocks, five AO levels on AO2 (7.5 min)
-%     p4       Protocol 4: one randomized sequence with mixed flash periods (about 15 min; lattice
-%              window s -14..+18 px since 29 Oct 2026)
+%     p4       Protocol 4: one randomized sequence with mixed flash periods (about 16 min; lattice
+%              window s -14..+22 px since 30 Oct 2026, lattice_trail_px; -14..+18 in run_session)
 %   With 'p2_mode','full' Protocol 2 runs as today (all 120 bars in one run, run_protocol2) and the
 %   read-out is called once at its end; the steps are then dark30, p1, p1_peak, reaim, p1_confirm, p2,
 %   readout, build, p3b, p4.
@@ -93,6 +93,8 @@ function S = run_session_v2(exp_folder, varargin)
 %                    2-px steps (7: 15 bars, +/-14 px, 120 frames; generate_protocol2 and run_session use 5:
 %                    11 bars, +/-10 px, 88 frames). The bars are still cropped to 30 px, so at +/-14 px a
 %                    cardinal bar keeps 60-80 % of its pixels and a diagonal one 25-60 % (30 Oct 2026)
+%     lattice_trail_px 22  the PD-side edge of the Protocol 4 lattice window (rapid_readout 'LatticeTrail';
+%                    default there and in run_session 18); the leading edge stays s -14, v +/-8
 %     thresholds: p1_peak_floor_mV 2, pd_vector_length_floor 0.1, center_max_dist_px 6, center_max_offset_px 4,
 %                 peak_floor_mV 3
 %     ao_channel 2, ai_channels [] (the Host's AI TCP stream; [] = off, nothing reads it), adc_rates_hz [0 10000 10000 0], host_config_file, pretrial_s 2,
@@ -312,7 +314,7 @@ d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', ''
     'reaim', 'auto', 'reaim_margin_px', 14, 'reaim_target_row', 24.5, 'reaim_deg_per_px', 1.25, 'reaim_sign', 1, ...
     'reaim_limit_deg', 20, 'stage_angle_deg', 0, 'reaim_step_deg', 0.5, 'reaim_window_px', [12 12], 'reaim_reps', 2, ...
     'reaim_flash_s', 0.2, 'reaim_gray_s', 0.15, 'reaim_tolerance_px', 6, 'reaim_reset', false, 'operator_answers', {{}}, ...
-    'reaim_confirm', 'full', 'reaim_min_snr', 4, 'reaim_min_frac', 0.5, 'p2_n_flank', 7);
+    'reaim_confirm', 'full', 'reaim_min_snr', 4, 'reaim_min_frac', 0.5, 'p2_n_flank', 7, 'lattice_trail_px', 22);
 if numel(varargin) == 1 && isstruct(varargin{1})
     given = varargin{1};
 else
@@ -367,7 +369,7 @@ L = struct('dark30', {{'30 s dark at 0 pA (break-in)', 0.5}}, 'p1', {{'Protocol 
     'p2a', {{'Protocol 2 stage 1 (sweeps)', 7.3}}, 'readout1', {{'Read-out 1 (placement PD, bar sets)', 0.3}}, ...
     'p2b', {{'Protocol 2 stage 2 (30 bars)', 2.6}},'readout', {{'Read-out 2 (center, sites, tables)', 0.5}}, ...
     'build', {{'Build Prot3b + Protocol 4', 0.5}}, 'p3b', {{'Prot3b (26 blocks, 5 AO levels)', 7.5}}, ...
-    'p4', {{'Protocol 4 (combined map)', 15}});
+    'p4', {{'Protocol 4 (combined map)', 16}});
 labels = cellfun(@(id) L.(id){1}, ids, 'UniformOutput', false);
 est = cellfun(@(id) L.(id){2}, ids);
 end
@@ -1252,7 +1254,7 @@ if exist('rapid_readout', 'file') == 2
     % writes <tag>_stage1.json and the stage-2 tables; call 2 adds 'Stage2', <session>/p2b and takes the bar
     % flashes from that log; 'P1Peak' puts the Protocol 1 peak into other_centers and the distance check.
     method = 'rapid_readout.m';
-    extra = {'Cell', tag, 'Out', out_dir, 'Figure', opts.show_figures};
+    extra = {'Cell', tag, 'Out', out_dir, 'Figure', opts.show_figures, 'LatticeTrail', opts.lattice_trail_px};
     if isfield(S.out, 'p1_peak') && isfield(S.out.p1_peak, 'xy') && ~isempty(S.out.p1_peak.xy)
         extra = [extra, {'P1Peak', double(S.out.p1_peak.xy(:).')}];
     end

@@ -141,7 +141,8 @@ table below before you worry.
 ## 5. The session, step by step
 
 Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice widened on 29 Oct. Total about 42 min
-for v1. **v2 since 30 Oct** (section 9): stage 2 plays 30 bars instead of 22 (+0.6 min): about 42.6 min, plus the
+for v1. **v2 since 30 Oct** (section 9): stage 2 plays 30 bars instead of 22 (+0.6 min), and the Protocol 4 lattice
+reaches s +22 instead of +18 (up to +1.1 min; nothing when the PD side runs off the screen): about 43.5 min, plus the
 re-aim when it fires.
 
 | # | step | takes | check, and what is normal |
@@ -157,7 +158,7 @@ re-aim when it fires.
 | 9 | `readout` | seconds | `Read-out (...): ... center col/row [c r], ... center peak X mV`, then `DECISION readout/center`. Normal: `read-out M6 center; tables shifted by [0 0] px`. `FLAG DECISION readout/center: Protocol 1 peak ...` means the center failed a sanity check (more than 6 px from the Protocol 1 peak, more than 4 px off the bar set, or a center peak below 3 mV). The session continues aimed at the Protocol 1 peak: tell Jin Yong and note it. |
 | 10 | `build` | seconds | `Prot3b: 26 frames, 26 blocks, 7.6 min; Protocol 4: ~450 frames, ~1780 flashes, ~15 min.` `FLAG Prot3b build:` or `FLAG Protocol 4 build:` list squares off the screen. A few is fine; most is not. |
 | 11 | `p3b`: Prot3b, ±0.5 pA via AO2 | 7.8 min | `Analysis p3b: R_gray G GOhm; pairs kept k/8; dR ...`. 28 Oct: 13 GΩ, 6/8, ON center −5.7 GΩ. `FLAG p3b: only k of 8 pairs pass the baseline QC` means fewer than 4 pairs kept: the cell drifted. The cell is not dropped for drift; drift is a result. |
-| 12 | `p4`: Protocol 4, combined map | ~15.4 min | `Analysis p4: lattice ON peak X mV; ... passes kept k/6`. 28 Oct: 17.4 mV, 6/6. `FLAG p4: k of 6 passes within 5 mV of pass 1` means the cell drifted. |
+| 12 | `p4`: Protocol 4, combined map | ~15.4 min (v2: up to ~16.5; `build` prints the exact time) | `Analysis p4: lattice ON peak X mV; ... passes kept k/6`. 28 Oct: 17.4 mV, 6/6. `FLAG p4: k of 6 passes within 5 mV of pass 1` means the cell drifted. |
 | – | end | | `Arena off (allOff): panels dark.` then `Session complete.` A `FLAG arena not turned off` means Jin Yong must switch the arena off by hand. |
 
 After every step, report: the step, its duration against the table, Vm, and any DECISION or FLAG in plain words.
@@ -303,6 +304,11 @@ read-outs), Protocol 4 (lattice peak, passes kept, the trailing hyperpolarizatio
     other, and every block within 5 mV of the first block of its current (agreed 29 Oct). The hand-over's
     wording would reject every pair.
   - **Protocol 4 lattice window:** now s −14…+18 px (it was −12…+16; widened 29 Oct, about 1.1 min more).
+    **v2 since 30 Oct:** s −14…+22 px (`lattice_trail_px` 22, rapid_readout's `'LatticeTrail'`; v1 keeps +18).
+    JY1028a's PD-side hyperpolarization ran from s +5 to beyond +16 px. On the 23 Oct cell (PD 18°) this adds
+    18 positions and 1.1 min. On JY1028a itself (PD 271°, straight down the screen from row 28) all 18 new
+    positions fall off the bottom, so it adds nothing there: the window can only reach the trailing side when the
+    screen has room on it.
   - **Stage-2 bar flashes, v2 since 30 Oct:** 15 bars per set at 2-px steps (±14 px, `p2_n_flank` 7; the
     Protocol 2 package's FLASHES pattern has 120 frames instead of 88), so 30 stage-2 bars instead of 22. The
     bars are still cropped to the 30-px square: at ±14 px a horizontal or vertical bar keeps 60–80 % of its pixels
@@ -340,8 +346,8 @@ there.
 | tests (the ones section 11 runs) | `test_protocols\test_run_session_dry.m`, `test_run_session_replay_jy.m`, `test_run_session_p1_aim.m`, `test_session_plots.m` (`test_run_session_joint.m` only runs on a Mac) |
 | **v2 only**: the launcher and the sequencer | `protocol_generation\Auto_T4_v2.m`, `run_session_v2.m` (a copy of `run_session.m` with the re-aim; the function names above are the same in it) |
 | **v2 only**: `reaim`, `p1_confirm` | `run_session_v2.m`: `step_reaim`, `step_p1_confirm` (the QC and the gate after the figure), `confirm_snr`, `build_p1_confirm_package`, `plot_reaim_confirm`, `reaim_reset`; `Auto_T4_v2.m`: `restore_path` (takes the `_reaim` folders off the path at every exit) |
-| **v2 only**: tests | `test_run_session_reaim.m`, `test_run_session_v2_dry.m`, `test_run_session_v2_widen.m` (the 30-bar stage 2 on recorded sessions) (run them with the four above, which test v1's `run_session.m`; `test_run_session_replay_jy.m` checks that v1's generated package is still byte-identical) |
-| **v2 only**: the wider stage 2 | `run_session_v2.m`: option `p2_n_flank`, `generate_protocol2_package`; shared, defaults unchanged: `generate_bar_flash_pos_fns.m`, `generate_bar_flash_stimulus_xy.m`, `rapid_readout.m` (bar counts from the FLASHES pattern) |
+| **v2 only**: tests | `test_run_session_reaim.m`, `test_run_session_v2_dry.m`, `test_run_session_v2_widen.m` (the 30-bar stage 2 and the +22 lattice on recorded sessions) (run them with the four above, which test v1's `run_session.m`; `test_run_session_replay_jy.m` checks that v1's generated package is still byte-identical) |
+| **v2 only**: the wider stage 2 and lattice | `run_session_v2.m`: options `p2_n_flank`, `lattice_trail_px`, `generate_protocol2_package`, `call_readout`; shared, defaults unchanged: `generate_bar_flash_pos_fns.m`, `generate_bar_flash_stimulus_xy.m`, `rapid_readout.m` (bar counts from the FLASHES pattern, `'LatticeTrail'`) |
 
 Outside this repository (read only, never edit, even in a fix):
 - `C:\matlabroot\G4_Display_Tools\`: arena control (`PControl_Matlab\controller\PanelsController.m`) and the
