@@ -1,15 +1,15 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Auto_T4_v2: instructions</title>
 <style>
-@page { size: Letter; margin: 7mm 10mm; }
-body { font-family: "Segoe UI", Arial, sans-serif; font-size: 8.5pt; line-height: 1.2; color: #111; margin: 0; }
+@page { size: Letter; margin: 6mm 9mm; }
+body { font-family: "Segoe UI", Arial, sans-serif; font-size: 8.1pt; line-height: 1.16; color: #111; margin: 0; }
 h1 { font-size: 15pt; margin: 0 0 1mm; }
 .sub { color: #555; margin: 0 0 2.4mm; font-size: 8.8pt; }
-h2 { font-size: 10.2pt; margin: 2.2mm 0 0.8mm; padding-bottom: 0.6mm; border-bottom: 1px solid #bbb; }
-code, pre { font-family: Consolas, "Courier New", monospace; font-size: 8.2pt; }
+h2 { font-size: 10pt; margin: 1.8mm 0 0.6mm; padding-bottom: 0.6mm; border-bottom: 1px solid #bbb; }
+code, pre { font-family: Consolas, "Courier New", monospace; font-size: 7.8pt; }
 pre { background: #f1f3f5; border: 1px solid #d5d9dd; border-radius: 3px; padding: 1.4mm 2.4mm; margin: 1mm 0 1.2mm; white-space: pre-wrap; }
 ol, ul { margin: 0.5mm 0 0.5mm 5mm; padding-left: 2mm; }
-li { margin: 0.4mm 0; }
+li { margin: 0.2mm 0; }
 table { border-collapse: collapse; width: 100%; margin: 1mm 0; }
 td { border: 1px solid #d5d9dd; padding: 0.9mm 1.8mm; vertical-align: top; }
 td:first-child { width: 29%; font-weight: 600; }
@@ -20,18 +20,19 @@ td:first-child { width: 29%; font-weight: 600; }
 </style></head><body>
 
 <h1>Auto_T4_v2: automatic cell session, one-page guide</h1>
-<p class="sub">REISERLAB-EPHYS, MATLAB R2023a. One command runs everything after break-in, about 45 min (2 min more when the arena is re-aimed). Version of 29 Oct 2026: <b>v1 plus the arena re-aim</b> for receptive fields near the top or bottom of the screen.</p>
+<p class="sub">REISERLAB-EPHYS, MATLAB R2023a. One command runs everything after break-in, about 45 min (3 min more when the arena is re-aimed). Version of 30 Oct 2026: <b>v1 plus the arena re-aim</b> for receptive fields near the top or bottom of the screen; the re-aim check now scans the whole Protocol 1 area and rejects noise.</p>
 
 <h2>Before the first cell of the day (once)</h2>
 <pre>addpath('C:\matlabroot\GitHub\nested_RF_stimulus_reaim\src\protocol_generation')
 Auto_T4_v2('JY1030a', 'L', 'check_only', true)</pre>
-<p>This checks the code, the arena controller, the Host settings (ADC1 and ADC2 at 10 kHz, 3 rows) and the disk space, and runs nothing. It must end with <b>"all checks passed"</b>. Close the G4 Conductor and any other MATLAB that talks to the arena. <b>Set the swiveling base to 0°</b> (or give its reading, below).</p>
+<p>This checks the code, the arena controller, the Host settings (ADC1 and ADC2 at 10 kHz, 3 rows) and the disk space, and runs nothing. It must end with <b>"all checks passed"</b>. <b>Type the addpath line before every Auto_T4_v2 call</b>: Auto_T4_v2 takes its folder off the path when it ends. Close the G4 Conductor and any other MATLAB that talks to the arena. <b>Set the swiveling base to 0°</b> (or give its reading, below).</p>
 
 <h2>Each cell</h2>
 <ol>
 <li>Break in. Current clamp, <b>0 pA</b>.</li>
 <li>Start the session with a <b>new cell tag</b> each time. The side is <code>'L'</code> or <code>'R'</code>.
-<pre>Auto_T4_v2('JY1030a', 'L')</pre></li>
+<pre>addpath('C:\matlabroot\GitHub\nested_RF_stimulus_reaim\src\protocol_generation')
+Auto_T4_v2('JY1030a', 'L')</pre></li>
 <li>A second MATLAB opens the <b>arena viewer</b>. A <b>status window</b> lists the steps (12), the clock times and any FLAG.</li>
 <li>After <b>30 s of dark</b>, MATLAB asks for the holding current: <b>set it on the amplifier, type the value in pA, press Enter.</b> Do not change it after this.</li>
 <li>Protocol 1 and its peak run. <b>Only if the peak is near the top or bottom edge</b>, the re-aim prompt comes (green box below). Otherwise nothing is asked.</li>
@@ -42,21 +43,23 @@ Auto_T4_v2('JY1030a', 'L', 'check_only', true)</pre>
 <ol>
 <li>Turn the base by that angle (the range is ±20°; <b>CLAMPED</b> means the full move does not fit). Press <b>Enter</b>, or type <b>s</b> and Enter to skip the re-aim.</li>
 <li>Type the angle you <b>actually</b> moved, then Enter (Enter alone = the suggested angle).</li>
-<li>A short Protocol 1 checks the new position (<b>about 40 s</b>). A figure then shows the map: gray square = peak before, red × = predicted, circle = found (green GOOD, orange CHECK).</li>
-<li>Choose: <b>Enter</b> = continue (Protocol 2 is aimed at the found peak); <b>c</b> = repeat the check; <b>a</b> = re-aim again from there (offered when still near the edge); <b>s</b> = stop.</li>
+<li>An ON scan of the <b>whole Protocol 1 area</b> finds the RF at the new angle (<b>about 1.6 min</b>). A figure then shows the map: gray square = peak before, red × = predicted, circle = found (green GOOD, orange CHECK = on the scan's edge, red = NO RESPONSE). The title gives the mV, the <b>SNR</b> (needs 4) and the ratio to the peak before (needs 0.5).</li>
+<li>GOOD or CHECK, choose: <b>Enter</b> = continue (Protocol 2 is aimed at the found peak); <b>c</b> = repeat the scan; <b>a</b> = re-aim again from there (offered when still near the edge); <b>s</b> = stop.</li>
+<li><b>NO RESPONSE</b> (noise only; Protocol 2 is <b>not</b> aimed there), choose: <b>c</b> = repeat the scan; <b>r</b> = turn the base back to the old reading, then the re-aim is asked again; <b>p</b> = turn the base back and go on with the old peak; <b>s</b> = stop.</li>
 </ol>
-<b>No response</b> in the check: the session stops. Most likely the base turned the wrong way. Turn it back to the old reading and resume with <code>'reaim_reset', true, 'reaim_sign', -1</code>. If the base is not at 0 at the start, add <code>'stage_angle_deg', &lt;reading&gt;</code>.</div>
+After <b>s</b> with no response: turn the base back to the old reading and resume with <code>'reaim_reset', true</code> (add <code>'reaim_sign', -1</code> if it turned the wrong way). If the base is not at 0 at the start, add <code>'stage_angle_deg', &lt;reading&gt;</code>.</div>
 
 <h2>Abort, resume, lost cell</h2>
 <table>
 <tr><td>Stop now</td><td>Press <b>Ctrl+C</b> in the MATLAB that runs the session (not the viewer). The display stops, the analog output returns to zero and the logs close. The arena stays on the gray background.</td></tr>
-<tr><td>Resume (after Ctrl+C, a FLAG stop, an error or a crash)</td><td>Type the <b>same command</b> again: <code>Auto_T4_v2('JY1030a', 'L')</code>. Steps that are done are kept. The interrupted step restarts from its beginning.</td></tr>
-<tr><td>Cell lost: close the record</td><td><code>Auto_T4_v2('JY1030a', 'L', 'abandon', true)</code>. Start the next cell with a new tag.</td></tr>
+<tr><td>Resume (after Ctrl+C, a FLAG stop, an error or a crash)</td><td>Type the <b>same two lines</b> again (addpath, then <code>Auto_T4_v2('JY1030a', 'L')</code>). Steps that are done are kept. The interrupted step restarts from its beginning.</td></tr>
+<tr><td>Cell lost: close the record</td><td>After the addpath line: <code>Auto_T4_v2('JY1030a', 'L', 'abandon', true)</code>. Start the next cell with a new tag.</td></tr>
 <tr><td>Arena dark by hand</td><td><code>c = PanelsController(); c.open(true); c.allOff(); c.close();</code></td></tr>
 </table>
 
-<div class="warn"><b>Fallback: the previous version (v1, no re-aim).</b> If v2 fails and cannot be resumed, run the last working version on a <b>new cell tag</b>:
-<pre>addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation'); Auto_T4_v1('JY1030b', 'L')</pre>
+<div class="warn"><b>Fallback: the previous version (v1, no re-aim).</b> If v2 fails and cannot be resumed, run the last working version on a <b>new cell tag</b>, two lines (if in doubt, <b>restart MATLAB</b> first):
+<pre>addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation')
+Auto_T4_v1('JY1030b', 'L')</pre>
 A session folder is resumed only by the version that started it.</div>
 
 <div class="cols"><div>

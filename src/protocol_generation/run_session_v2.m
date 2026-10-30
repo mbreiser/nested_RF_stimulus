@@ -12,7 +12,8 @@ function S = run_session_v2(exp_folder, varargin)
 %   Operator inputs: starting the session (break-in done, 0 pA), one key after the 30 s dark period
 %   (the holding current is set once, by hand, and never changed by the sequencer) and Ctrl-C to
 %   abort. One more physical hand-off, only when the Protocol 1 peak is too near the top or bottom edge:
-%   the arena re-aim (rotate the stage by the suggested angle, Enter, type the angle moved; or 's' to skip).
+%   the arena re-aim (rotate the stage by the suggested angle, Enter, type the angle moved; or 's' to skip;
+%   then one letter after the confirmation figure).
 %   Every other decision is rule-based with a defined fallback, is printed as a flag when it
 %   fires and is logged with its inputs in EXP_FOLDER/decisions.json, so the analysis can re-make it
 %   offline. There is no approval prompt. One override path exists and is never prompted for: the
@@ -27,10 +28,12 @@ function S = run_session_v2(exp_folder, varargin)
 %              above or below it, the operator is asked to rotate the stage (+/-20 deg) by the angle that
 %              puts the peak on reaim_target_row (clamped to the range), then types the angle moved; 's' skips.
 %              Otherwise nothing is asked (decision edge_check logged)
-%     p1_confirm  only after a rotation: a short Protocol 1 (the same square pattern, the squares within
-%              reaim_window_px of the predicted position, reaim_reps repeats, about 1 min); its ON peak replaces
-%              the Protocol 1 peak for everything after (decision confirm: predicted vs found); no response
-%              in the window stops the session (wrong rotation sign or cell lost; see 'reaim_reset')
+%     p1_confirm  only after a rotation: a short Protocol 1 (every ON square of the same pattern, reaim_reps
+%              repeats, about 1.6 min; 30 Oct 2026). Its ON peak replaces the Protocol 1 peak for everything after
+%              only when it is a response: SNR >= reaim_min_snr and >= reaim_min_frac x the peak before the
+%              move (decision confirm: GOOD, CHECK when on the scan's outer row or column, or NO RESPONSE). A
+%              figure, then the operator's choice (decision gate): Enter / c repeat / a re-aim again / s stop;
+%              after NO RESPONSE: c repeat / r rotate back and redo / p rotate back, old peak / s stop
 %     p2a      Protocol 2 stage 1: the five sweep blocks, 16 directions, 3 repeats (about 7.3 min)
 %     readout1 read-out call 1: placement PD (rule: mean of the 28 and 56 deg/s vectors within 10 deg,
 %              otherwise the 28 deg/s vector with a warning; > 5 deg sets a flag), the two bar sets, the
@@ -109,8 +112,14 @@ function S = run_session_v2(exp_folder, varargin)
 %                        on the rig; the rig checklist in docs/notes/ARENA_REAIM_20261029.md determines it
 %       reaim_limit_deg  20   the stage range (+/-);  stage_angle_deg  0  the stage reading when the session starts
 %       reaim_step_deg   0.5  the suggestion is rounded to this
-%       reaim_window_px  [12 12]  [col row] half-size of the confirmation window around the predicted peak
-%       reaim_reps 2, reaim_flash_s 0.2, reaim_gray_s 0.15 (Protocol 1's timing), reaim_tolerance_px 6 (one 6-px square)
+%       reaim_confirm    'full'  the confirmation scans every ON square of the Protocol 1 pattern (no OFF);
+%                        'window': the ON and OFF squares within reaim_window_px of the predicted peak (29 Oct)
+%       reaim_window_px  [12 12]  [col row] half-size of that window ('window' only)
+%       reaim_min_snr    4    the scan's ON peak needs SNR >= this (snr_mean as rapid_p1_peak: peak / (noise /
+%                        sqrt(repeats))); a 2-repeat map of noise alone peaks near SNR 2.5 (JY1030a: 1.7)
+%       reaim_min_frac   0.5  ... and >= this x the Protocol 1 ON peak before the move (and >= p1_peak_floor_mV)
+%       reaim_reps 2, reaim_flash_s 0.2, reaim_gray_s 0.15 (Protocol 1's timing), reaim_tolerance_px 6 (one 6-px
+%                        square: a larger offset from the prediction is flagged as geometry, not a failure)
 %       reaim_reset      false  true: forget a re-aim (reaim and p1_confirm pending again, the Protocol 1 peak
 %                        restored) so it is asked again on this call; rotate the stage back first
 %     operator_answers  {}  answers taken, in order, before the keyboard for every operator prompt (tests)
@@ -298,7 +307,8 @@ d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', ''
     'controller_factory', [], 'sim_speed', 0, 'verbose_mock', false, 'show_status', [], 'overview_plots', true, 'analysis_plots', true, ...
     'reaim', 'auto', 'reaim_margin_px', 14, 'reaim_target_row', 24.5, 'reaim_deg_per_px', 1.25, 'reaim_sign', 1, ...
     'reaim_limit_deg', 20, 'stage_angle_deg', 0, 'reaim_step_deg', 0.5, 'reaim_window_px', [12 12], 'reaim_reps', 2, ...
-    'reaim_flash_s', 0.2, 'reaim_gray_s', 0.15, 'reaim_tolerance_px', 6, 'reaim_reset', false, 'operator_answers', {{}});
+    'reaim_flash_s', 0.2, 'reaim_gray_s', 0.15, 'reaim_tolerance_px', 6, 'reaim_reset', false, 'operator_answers', {{}}, ...
+    'reaim_confirm', 'full', 'reaim_min_snr', 4, 'reaim_min_frac', 0.5);
 if numel(varargin) == 1 && isstruct(varargin{1})
     given = varargin{1};
 else
@@ -314,6 +324,7 @@ end
 if ~ismember(o.p2_mode, {'two_stage', 'full'}), error('run_session:options', 'p2_mode must be two_stage or full'); end
 if ~ismember(o.reaim, {'auto', 'off'}), error('run_session:options', 'reaim must be auto or off'); end
 if ~ismember(o.reaim_sign, [-1 1]), error('run_session:options', 'reaim_sign must be +1 or -1'); end
+if ~ismember(o.reaim_confirm, {'full', 'window'}), error('run_session:options', 'reaim_confirm must be full or window'); end
 o.operator_answers = cellstr(o.operator_answers);
 if isempty(o.auto_accept), o.auto_accept = o.dry_run; end
 if isempty(o.show_figures), o.show_figures = ~o.dry_run; end
@@ -348,7 +359,7 @@ end
 function [labels, est] = step_labels(ids)
 L = struct('dark30', {{'30 s dark at 0 pA (break-in)', 0.5}}, 'p1', {{'Protocol 1 (coarse map)', 4.5}}, ...
     'p1_peak', {{'Protocol 1 ON peak (read-out)', 0.2}}, 'reaim', {{'Arena re-aim check (edge RF: rotate)', 0.1}}, ...
-    'p1_confirm', {{'Quick Protocol 1 after the re-aim', 0.8}}, 'p2', {{'Protocol 2 (all 88 bars, as today)', 14.6}}, ...
+    'p1_confirm', {{'Protocol 1 ON scan after the re-aim', 1.6}},'p2', {{'Protocol 2 (all 88 bars, as today)', 14.6}}, ...
     'p2a', {{'Protocol 2 stage 1 (sweeps)', 7.3}}, 'readout1', {{'Read-out 1 (placement PD, bar sets)', 0.3}}, ...
     'p2b', {{'Protocol 2 stage 2 (22 bars)', 1.7}}, 'readout', {{'Read-out 2 (center, sites, tables)', 0.5}}, ...
     'build', {{'Build Prot3b + Protocol 4', 0.5}}, 'p3b', {{'Prot3b (26 blocks, 5 AO levels)', 7.5}}, ...
@@ -660,10 +671,17 @@ S = decide(S, 'reaim', 'rotation', rrule, rot, sprintf('suggested %+g deg, moved
 end
 
 function S = step_p1_confirm(S, opts)
-% After a rotation: a short Protocol 1 over the squares of the same pattern within reaim_window_px of the
-% predicted peak, reaim_reps repeats, then its ON peak. Decision confirm: found within reaim_tolerance_px
-% (rows) of the prediction and not on the window's edge -> good; otherwise flagged; the found peak replaces
-% the Protocol 1 peak either way (it is measured after the move). Below p1_peak_floor_mV -> stop.
+% After a rotation: a short Protocol 1 at the new stage angle, then the QC of its ON peak (30 Oct 2026).
+% reaim_confirm 'full' (default): every ON square of the Protocol 1 pattern, reaim_reps repeats (the 6-px LHS
+% grid: 128 squares, about 1.6 min); 'window': the ON and OFF squares within reaim_window_px of the predicted
+% peak (the 29 Oct version). The peak is real when (a) its SNR (rapid_p1_peak's snr_mean) is >= reaim_min_snr,
+% (b) it is >= max(p1_peak_floor_mV, reaim_min_frac x the Protocol 1 ON peak before the move); then GOOD when
+% (c) it is not on the outer row or column of the scan, CHECK when it is (the found peak is used either way).
+% (a) or (b) fails -> NO RESPONSE: Protocol 2 is not aimed there and the operator chooses (repeat the scan,
+% rotate back and redo the re-aim, rotate back and go on with the peak from before the move, or stop). The
+% offset from the prediction is a geometry flag, never a failure. Why: a mean of 2 repeats has about 1.4 mV
+% of noise, so the largest of 100 squares of noise alone is about 3 mV (JY1030a, 29 Oct: GOOD at 3.0 mV,
+% SNR 1.7, under the 2 mV floor alone).
 if ~isfield(S.out, 'reaim') || ~getf(S.out.reaim, 'done', false), error('run_session:skip', 'no re-aim'); end
 A = S.out.reaim; pk = S.out.p1_peak;
 pred = double(A.predicted_xy(:).');
@@ -673,112 +691,196 @@ pkg = fullfile(S.exp_folder, 'p1_confirm');
 B = build_p1_confirm_package(pat, pred, pkg, opts, S.cell);
 rows = rows_from_package(pkg);
 S.steps(strcmp({S.steps.id}, 'p1_confirm')).est_min = B.programmed_s / 60;
-say(S, 'Re-aim confirmation: %d squares (%d flashes per repeat) within %s px of col/row %s, %d repeats, %.1f min.', ...
-    B.n_positions, numel(B.frames), mat2str(opts.reaim_window_px), mat2str(pred, 4), opts.reaim_reps, B.programmed_s/60);
+if strcmp(B.mode, 'full')
+    say(S, 'Re-aim confirmation: all %d ON squares of the Protocol 1 pattern (cols %g-%g, rows %g-%g), %d repeats, %.1f min; predicted peak at col/row %s.', ...
+        B.n_positions, B.window.col, B.window.row, opts.reaim_reps, B.programmed_s/60, mat2str(pred, 4));
+else
+    say(S, 'Re-aim confirmation: %d squares (%d flashes per repeat) within %s px of col/row %s, %d repeats, %.1f min.', ...
+        B.n_positions, numel(B.frames), mat2str(opts.reaim_window_px), mat2str(pred, 4), opts.reaim_reps, B.programmed_s/60);
+end
 status = run_rows(opts, pkg, rows, [], S);
 S.out.p1_confirm = struct('folder', pkg, 'rows', numel(rows), 'state', status.state, 'log_folder', fullfile(pkg, 'Log Files'), ...
-    'pattern', B.pattern, 'n_positions', B.n_positions, 'window', B.window, 'predicted_xy', pred);
+    'pattern', B.pattern, 'mode', B.mode, 'n_positions', B.n_positions, 'window', B.window, 'predicted_xy', pred);
 save_state(S, fullfile(S.exp_folder, 'session_state.json'));
 
 out_dir = fullfile(S.exp_folder, 'readout', 'p1_confirm'); if ~isfolder(out_dir), mkdir(out_dir); end
 fn = opts.p1_readout_fn;
-if isempty(fn) && opts.dry_run
-    % no log in a dry run: take the window's ON square nearest the prediction
+qc_applied = ~(isempty(fn) && opts.dry_run);
+if ~qc_applied
+    % no log in a dry run: take the ON square nearest the prediction; the QC is not applied
     on = B.on_frames; [~, j] = min(hypot(B.cx(on) - pred(1), B.cy(on) - pred(2)));
     Q = struct('frame', on(j), 'xy', [], 'peak_mV', NaN); src = 'dry run: no log, the square nearest the prediction';
 else
     if isempty(fn) && exist('rapid_p1_peak', 'file') == 2, fn = @(f, o, p) rapid_p1_peak(f, 'Out', o, 'Cell', S.cell, 'Figure', opts.show_figures, 'Pattern', p); end
     if isempty(fn), error('run_session:stop', 'no Protocol 1 read-out on the path (rapid_p1_peak.m) for the re-aim confirmation'); end
-    Q = call_p1_readout(fn, pkg, out_dir, B.pattern); src = 'rapid_p1_peak (re-aim window)';
+    Q = call_p1_readout(fn, pkg, out_dir, B.pattern); src = sprintf('rapid_p1_peak (re-aim %s scan)', B.mode);
 end
-fr = getf(Q, 'frame', []); mv = getf(Q, 'peak_mV', NaN);
-in = struct('predicted_xy', pred, 'frame', fr, 'peak_mV', mv, 'floor_mV', opts.p1_peak_floor_mV, 'tolerance_px', opts.reaim_tolerance_px, ...
-    'window', B.window, 'rotation_deg', A.actual_deg, 'sign', A.sign, 'before_xy', A.peak_xy, 'before_peak_mV', getf(pk, 'peak_mV', NaN));
-crule = sprintf(['ON peak of the confirmation >= p1_peak_floor_mV (else stop); good when its row is within reaim_tolerance_px = %g of the ' ...
-    'prediction and it is not on the window''s outer row or column; the found peak replaces the Protocol 1 peak'], opts.reaim_tolerance_px);
-if isempty(fr) || ~ismember(fr, B.frames) || (isfinite(mv) && mv < opts.p1_peak_floor_mV)
-    S = decide(S, 'p1_confirm', 'confirm', crule, in, sprintf('NO response in the re-aim window (peak %s mV, frame %s)', num2str(mv), mat2str(fr)), true, 'reaim_no_response');
-    S.stop_request = sprintf(['no response above %g mV in the re-aim window around col/row %s. Wrong rotation direction (reaim_sign) or the cell is lost. ' ...
-        'Rotate the stage back to %+g deg and resume with ''reaim_reset'', true (and ''reaim_sign'', %d if the direction was wrong)'], ...
-        opts.p1_peak_floor_mV, mat2str(pred, 4), A.stage_before_deg, -A.sign);
-    return
+
+% the QC of the scan's ON peak
+fr = getf(Q, 'frame', []); mv = double(getf(Q, 'peak_mV', NaN));
+first = pk; if isfield(S.out, 'reaim_first_peak') && ~isempty(S.out.reaim_first_peak), first = S.out.reaim_first_peak; end
+pre_mV = double(getf(first, 'peak_mV', NaN));                       % the Protocol 1 ON peak before the (first) move
+[snr, noise, nrep] = confirm_snr(Q);
+thr = max([opts.p1_peak_floor_mV, opts.reaim_min_frac * pre_mV]);   % max ignores NaN (peak_frame override: the floor)
+ratio = mv / pre_mV;
+in_scan = isscalar(fr) && ismember(fr, B.on_frames);
+qa = ~qc_applied || snr >= opts.reaim_min_snr;
+qb = ~qc_applied || mv >= thr;
+resp = in_scan && qa && qb;
+nxy = [NaN NaN]; pol = ''; on_edge = false; room = [NaN NaN]; d = [NaN NaN];
+if in_scan
+    [nxy, pol] = frame_to_xy(B.pattern, fr);
+    d = nxy - pred;
+    on = B.on_frames;
+    on_edge = nxy(1) <= min(B.cx(on)) || nxy(1) >= max(B.cx(on)) || nxy(2) <= min(B.cy(on)) || nxy(2) >= max(B.cy(on));
+    room = [nxy(2) - 0.5, 48.5 - nxy(2)];
 end
-[nxy, pol] = frame_to_xy(B.pattern, fr);
-d = nxy - pred;
-on_edge = nxy(1) <= min(B.cx(B.on_frames)) || nxy(1) >= max(B.cx(B.on_frames)) || nxy(2) <= min(B.cy(B.on_frames)) || nxy(2) >= max(B.cy(B.on_frames));
-room = [nxy(2) - 0.5, 48.5 - nxy(2)];
 moved = nxy(2) - A.peak_xy(2); expected = pred(2) - A.peak_xy(2);
 flags = {};
-if abs(d(2)) > opts.reaim_tolerance_px, flags{end+1} = sprintf('moved %+.1f rows, predicted %+.1f (check reaim_deg_per_px / reaim_sign)', moved, expected); end
-if on_edge, flags{end+1} = 'peak on the window''s edge: the RF may lie beyond it'; end
-if any(room < opts.reaim_margin_px), flags{end+1} = sprintf('still near the edge (%g / %g px above / below)', room(1), room(2)); end
-if sign(moved) ~= sign(expected) && moved ~= 0, flags{end+1} = 'moved the OPPOSITE way to the prediction: reaim_sign is wrong'; end
-good = isempty(flags);
-if ~opts.dry_run || ~isempty(opts.p1_readout_fn), say(S, 'Re-aim confirmation peak: frame %d at col/row %s, %.1f mV (before the move: %.1f mV).', fr, mat2str(nxy, 4), mv, getf(pk, 'peak_mV', NaN)); end
-before = pk; if isfield(before, 'before_reaim'), before = rmfield(before, 'before_reaim'); end
-if ~isfield(S.out, 'reaim_first_peak') || isempty(S.out.reaim_first_peak), S.out.reaim_first_peak = before; end
-new = pk;
-new.frame = fr; new.aim_xy = nxy; new.aim_polarity = pol; new.peak_mV = mv;
-qx = getf(Q, 'xy', []); if numel(qx) == 2, new.xy = double(qx(:).'); else, new.xy = nxy; end
-new.polarity = pol; new.pattern = B.pattern; new.source = src; new.before_reaim = S.out.reaim_first_peak; new.reaim_deg = A.actual_deg;
-S.out.p1_peak = new;
-S.out.p1_confirm.found_xy = nxy; S.out.p1_confirm.offset_px = d; S.out.p1_confirm.good = good;
-in.found_xy = nxy; in.offset_px = d; in.on_window_edge = on_edge; in.room_px = room;
-verdict = tern(good, 'GOOD', 'CHECK');
-S = decide(S, 'p1_confirm', 'confirm', crule, in, sprintf('%s: found col/row %s, predicted %s (row offset %+.1f px); Protocol 2 is aimed there', ...
-    verdict, mat2str(nxy, 4), mat2str(pred, 4), d(2)), ~good, strjoin(flags, '; '));
+if ~in_scan, flags{end+1} = sprintf('the read-out''s ON peak (frame %s) is not a square of the scan', mat2str(fr)); end
+if in_scan && ~qa, flags{end+1} = tern(isfinite(snr), sprintf('SNR %.1f < %g', snr, opts.reaim_min_snr), 'SNR unknown (no SD across repeats from the read-out)'); end
+if in_scan && ~qb, flags{end+1} = sprintf('peak %.1f mV < %.1f mV (%.2f x the %.1f mV before the move; needs %g x)', mv, thr, ratio, pre_mV, opts.reaim_min_frac); end
+if resp
+    if on_edge, flags{end+1} = 'peak on the outer row or column of the scan: the RF may lie beyond it'; end
+    if any(abs(d) > opts.reaim_tolerance_px), flags{end+1} = sprintf('geometry: found %s px (col, row) from the prediction; moved %+.1f rows, predicted %+.1f (check reaim_deg_per_px / reaim_sign)', mat2str(d, 3), moved, expected); end
+    if sign(moved) ~= sign(expected) && moved ~= 0, flags{end+1} = 'geometry: moved the OPPOSITE way to the prediction: reaim_sign is wrong'; end
+    if any(room < opts.reaim_margin_px), flags{end+1} = sprintf('still near the edge (%g / %g px above / below)', room(1), room(2)); end
+end
+if ~resp, verdict = 'NO RESPONSE'; elseif on_edge, verdict = 'CHECK'; else, verdict = 'GOOD'; end
+if qc_applied
+    qtxt = sprintf('%.1f mV, SNR %.1f (needs %g), %.2f x the peak before the move (needs %g)', mv, snr, opts.reaim_min_snr, ratio, opts.reaim_min_frac);
+else
+    qtxt = 'dry run: no log, QC not applied';
+end
+in = struct('mode', B.mode, 'predicted_xy', pred, 'frame', fr, 'peak_mV', mv, 'snr_mean', snr, 'noise_single_mV', noise, 'n_repeats', nrep, ...
+    'min_snr', opts.reaim_min_snr, 'pre_move_peak_mV', pre_mV, 'ratio_to_pre_move', ratio, 'min_frac', opts.reaim_min_frac, ...
+    'floor_mV', opts.p1_peak_floor_mV, 'amplitude_threshold_mV', thr, ...
+    'qc', struct('applied', qc_applied, 'snr_ok', qa, 'amplitude_ok', qb, 'in_scan', in_scan, 'not_on_scan_edge', ~on_edge), ...
+    'tolerance_px', opts.reaim_tolerance_px, 'window', B.window, 'rotation_deg', A.actual_deg, 'sign', A.sign, 'before_xy', A.peak_xy, ...
+    'found_xy', nxy, 'offset_px', d, 'on_scan_edge', on_edge, 'room_px', room);
+crule = sprintf(['the scan''s ON peak is a response when (a) SNR >= reaim_min_snr = %g (snr_mean as rapid_p1_peak) and (b) peak >= ' ...
+    'max(p1_peak_floor_mV, reaim_min_frac = %g x the Protocol 1 ON peak before the move); else NO RESPONSE (Protocol 2 not aimed there; ' ...
+    'the operator chooses). A response is GOOD when (c) it is not on the scan''s outer row or column, else CHECK; either way it replaces ' ...
+    'the Protocol 1 peak. The offset from the prediction (reaim_tolerance_px = %g) is a geometry flag'], opts.reaim_min_snr, opts.reaim_min_frac, opts.reaim_tolerance_px);
+S.out.p1_confirm.found_xy = nxy; S.out.p1_confirm.offset_px = d; S.out.p1_confirm.peak_mV = mv; S.out.p1_confirm.snr = snr;
+S.out.p1_confirm.ratio = ratio; S.out.p1_confirm.verdict = verdict; S.out.p1_confirm.good = strcmp(verdict, 'GOOD');
+if qc_applied, say(S, 'Re-aim scan ON peak: frame %s at col/row %s, %s (before the move: %.1f mV).', mat2str(fr), mat2str(nxy, 4), qtxt, pre_mV); end
+pk_xy = double(getf(pk, 'aim_xy', getf(pk, 'xy', [NaN NaN])));
+if resp
+    before = pk; if isfield(before, 'before_reaim'), before = rmfield(before, 'before_reaim'); end
+    if ~isfield(S.out, 'reaim_first_peak') || isempty(S.out.reaim_first_peak), S.out.reaim_first_peak = before; end
+    new = pk;
+    new.frame = fr; new.aim_xy = nxy; new.aim_polarity = pol; new.peak_mV = mv;
+    qx = getf(Q, 'xy', []); if numel(qx) == 2, new.xy = double(qx(:).'); else, new.xy = nxy; end
+    new.polarity = pol; new.pattern = B.pattern; new.source = src; new.before_reaim = S.out.reaim_first_peak; new.reaim_deg = A.actual_deg;
+    S.out.p1_peak = new;
+    outcome = sprintf('%s: found col/row %s (%s), predicted %s; Protocol 2 is aimed there', verdict, mat2str(nxy, 4), qtxt, mat2str(pred, 4));
+else
+    outcome = sprintf('NO RESPONSE: the scan''s largest ON response, at col/row %s (%s), is not a response; Protocol 2 is NOT aimed there', mat2str(nxy, 4), qtxt);
+end
+S = decide(S, 'p1_confirm', 'confirm', crule, in, outcome, ~strcmp(verdict, 'GOOD'), strjoin(flags, '; '));
 
-% the operator sees the confirmation map (predicted vs found) and confirms before Protocol 2
-png = plot_reaim_confirm(S, opts, B, Q, A, pred, nxy, verdict);
+% the operator sees the scan (predicted vs found, the SNR and the ratio) and chooses before Protocol 2
+png = plot_reaim_confirm(S, opts, B, Q, A, pred, nxy, verdict, qtxt);
 S.out.p1_confirm.png = png;
 if ~isempty(png), say(S, 'Re-aim confirmation figure: %s', png); end
-still_near = any(room < opts.reaim_margin_px);
-fprintf(['\n  Re-aim %s: found col/row %s (predicted %s)%s.\n' ...
-    '    Enter  continue: Protocol 2 aimed at the found peak\n' ...
-    '    c      repeat the check (the same window, the stage where it is)\n' ...
-    '%s' ...
-    '    s      stop the session here\n'], verdict, mat2str(nxy, 4), mat2str(pred, 4), tern(isempty(flags), '', [' - ' strjoin(flags, '; ')]), ...
-    tern(still_near, sprintf('    a      re-aim again from the found peak (the stage now at %+g deg)\n', A.stage_after_deg), ''));
-valid = {'', 'c', 's'}; if still_near, valid{end+1} = 'a'; end
+back = A.stage_before_deg;
+still_near = resp && any(room < opts.reaim_margin_px);
+if resp
+    fprintf(['\n  Re-aim %s: found col/row %s (predicted %s): %s%s.\n' ...
+        '    Enter  continue: Protocol 2 aimed at the found peak\n' ...
+        '    c      repeat the scan (the stage where it is)\n' ...
+        '%s' ...
+        '    s      stop the session here\n'], verdict, mat2str(nxy, 4), mat2str(pred, 4), qtxt, tern(isempty(flags), '', [' - ' strjoin(flags, '; ')]), ...
+        tern(still_near, sprintf('    a      re-aim again from the found peak (the stage now at %+g deg)\n', A.stage_after_deg), ''));
+    valid = {'', 'c', 's'}; if still_near, valid{end+1} = 'a'; end
+    dflt = '';
+else
+    fprintf(['\n  Re-aim NO RESPONSE: the scan''s largest ON response is %.1f mV at col/row %s: SNR %.1f (needs >= %g), %.2f x the\n' ...
+        '  Protocol 1 peak before the move (%.1f mV; needs >= %g). Protocol 2 is NOT aimed there. Type a letter and Enter:\n' ...
+        '    c      repeat the scan (the stage where it is, %+g deg)\n' ...
+        '    r      rotate the stage back to %+g deg, then redo the re-aim (it is asked again)\n' ...
+        '    p      rotate the stage back to %+g deg, then go on with the Protocol 1 peak from before the move (col/row %s)\n' ...
+        '    s      stop the session here\n'], mv, mat2str(nxy, 4), snr, opts.reaim_min_snr, ratio, pre_mV, opts.reaim_min_frac, ...
+        A.stage_after_deg, back, back, mat2str(pk_xy, 4));
+    valid = {'c', 'r', 'p', 's'};
+    dflt = tern(opts.auto_accept, 's', '');
+end
 r = 'x';
 for k = 1:5
-    r = lower(strtrim(ask(opts, 'Your choice: ', '')));
+    r = lower(strtrim(ask(opts, 'Your choice: ', dflt)));
     if ismember(r, valid), break; end
     say(S, 'Not one of the choices: "%s"', r);
 end
 if ~ismember(r, valid), r = 's'; end
-grule = 'the operator, after the confirmation figure: Enter continue, c repeat the check, a re-aim again (when still near the edge), s stop';
-gin = struct('choice', r, 'verdict', verdict, 'found_xy', nxy, 'stage_deg', A.stage_after_deg);
+grule = ['the operator, after the confirmation figure: a response -> Enter continue, c repeat the scan, a re-aim again (when still ' ...
+    'near the edge), s stop; NO RESPONSE -> c repeat the scan, r rotate back and redo the re-aim, p rotate back and go on with ' ...
+    'the peak from before the move, s stop'];
+gin = struct('choice', r, 'verdict', verdict, 'found_xy', nxy, 'peak_mV', mv, 'snr_mean', snr, 'ratio_to_pre_move', ratio, ...
+    'stage_deg', A.stage_after_deg, 'stage_before_deg', back);
 switch r
     case ''
         S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('continue: Protocol 2 aimed at col/row %s', mat2str(nxy, 4)), false, '');
     case 'c'
         S.out.p1_peak = pk;
-        S = decide(S, 'p1_confirm', 'gate', grule, gin, 'repeat the check', false, 'operator_repeat');
+        S = decide(S, 'p1_confirm', 'gate', grule, gin, 'repeat the scan', false, 'operator_repeat');
         S.redo_from = 'p1_confirm';
     case 'a'
         S.out.stage_now_deg = A.stage_after_deg;
         S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('re-aim again from col/row %s (stage at %+g deg)', mat2str(nxy, 4), A.stage_after_deg), false, 'operator_reaim_again');
         S.redo_from = 'reaim';
+    case {'r', 'p'}
+        ask(opts, sprintf('Rotate the stage back to %+g deg on its scale, then press Enter: ', back), '');
+        S.out.p1_peak = pk; S.out.stage_now_deg = back;
+        if strcmp(r, 'r')
+            S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('stage back at %+g deg: redo the re-aim', back), true, 'operator_rotate_back');
+            S.redo_from = 'reaim';
+        else
+            S.out.reaim.reverted = true;
+            S = decide(S, 'p1_confirm', 'gate', grule, gin, sprintf('stage back at %+g deg: go on with the Protocol 1 peak from before the move, col/row %s', ...
+                back, mat2str(pk_xy, 4)), true, 'operator_premove');
+        end
     case 's'
         S = decide(S, 'p1_confirm', 'gate', grule, gin, 'stopped by the operator after the re-aim confirmation', true, 'operator_stop');
         S.out.p1_peak = pk;
-        S.stop_request = sprintf(['stopped by the operator after the re-aim confirmation. The same command resumes (the check runs again, then ' ...
-            'this choice); to redo the re-aim from the start, rotate the stage back to %+g deg and add ''reaim_reset'', true'], ...
-            getf(S.out.reaim, 'stage_before_deg', 0));
+        if resp
+            S.stop_request = sprintf(['stopped by the operator after the re-aim confirmation. The same command resumes (the scan runs again, then ' ...
+                'this choice); to redo the re-aim from the start, rotate the stage back to %+g deg and add ''reaim_reset'', true'], ...
+                getf(S.out.reaim, 'stage_before_deg', 0));
+        else
+            S.stop_request = sprintf(['no response in the re-aim scan; stopped by the operator. Rotate the stage back to %+g deg and resume ' ...
+                'with ''reaim_reset'', true to be asked the re-aim again (add ''reaim_sign'', %d if the stage turned the wrong way); the ' ...
+                'same command without it repeats the scan at the current angle'], back, -A.sign);
+        end
 end
 end
 
-function png = plot_reaim_confirm(S, opts, B, Q, A, pred, nxy, verdict)
-% The confirmation map on the arena: the ON dV of each square of the window (when the read-out gives its
-% map rows), the window, the Protocol 1 peak before the move, the predicted and the found peak, the margin
-% lines. Saved as EXP_FOLDER/plots/p1_confirm_reaim.png; shown when show_figures. Never stops the session.
+function [snr, noise, nrep] = confirm_snr(Q)
+% SNR of the confirmation's ON peak as rapid_p1_peak's snr_mean: peak / (noise / sqrt(repeats)), the noise
+% the RMS over the ON squares of the SD across repeats. Q.ON when the read-out gives it, else from Q.rows.
+snr = NaN; noise = NaN; nrep = NaN;
+on = getf(Q, 'ON', []);
+if isstruct(on) && isfield(on, 'snr_mean') && ~isempty(on.snr_mean)
+    snr = double(on.snr_mean); noise = double(getf(on, 'noise_single_mV', NaN)); nrep = double(getf(Q, 'n_repeats', NaN)); return
+end
+r = getf(Q, 'rows', []);
+if ~isstruct(r) || ~all(isfield(r, {'polarity', 'dV_mean_mV', 'dV_sd_across_repeats_mV', 'n_repeats'})), return; end
+r = r(strcmp({r.polarity}, 'ON')); if isempty(r), return; end
+sd = [r.dV_sd_across_repeats_mV]; noise = sqrt(mean(sd(~isnan(sd)) .^ 2)); nrep = max([r.n_repeats]);
+snr = max([r.dV_mean_mV]) / (noise / sqrt(nrep));
+end
+
+function png = plot_reaim_confirm(S, opts, B, Q, A, pred, nxy, verdict, qtxt)
+% The confirmation map on the arena: the ON dV of each square of the scan (when the read-out gives its map
+% rows), the scanned area, the Protocol 1 peak before the move, the predicted and the found peak, the
+% margin lines, the SNR and the ratio. Saved as EXP_FOLDER/plots/p1_confirm_reaim_<time>.png; shown when
+% show_figures. Never stops the session.
 png = '';
 try
     d = fullfile(S.exp_folder, 'plots'); if ~isfolder(d), mkdir(d); end
     png = fullfile(d, sprintf('p1_confirm_reaim_%s.png', char(datetime('now', 'Format', 'HHmmss'))));
     vis = opts.show_figures && usejava('desktop');
-    fig = figure('Visible', tern(vis, 'on', 'off'), 'Name', 'Re-aim confirmation', 'NumberTitle', 'off', 'Color', 'w', 'Position', [80 80 1000 360]);
+    fig = figure('Visible', tern(vis, 'on', 'off'), 'Name', 'Re-aim confirmation', 'NumberTitle', 'off', 'Color', 'w', 'Position', [80 80 1000 380]);
     ax = axes(fig); hold(ax, 'on'); set(ax, 'YDir', 'reverse'); axis(ax, 'equal'); xlim(ax, [16.5 192.5]); ylim(ax, [0.5 48.5]);
     rows = getf(Q, 'rows', []); g = getf(S.out.p1_peak, 'grid_px', 6);
     if isstruct(rows) && isfield(rows, 'dV_mean_mV')
@@ -795,12 +897,14 @@ try
     plot(ax, [16.5 192.5], [48.5 - m, 48.5 - m], ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
     w = B.window; rectangle(ax, 'Position', [w.col(1), w.row(1), diff(w.col), diff(w.row)], 'LineStyle', '--', 'EdgeColor', 'k');
     b = double(A.peak_xy(:).');
+    col = struct('GOOD', [0 0.6 0], 'CHECK', [0.9 0.5 0], 'NO_RESPONSE', [0.85 0 0]);
     h(1) = plot(ax, b(1), b(2), 's', 'MarkerSize', 10, 'LineWidth', 1.5, 'Color', [0.5 0.5 0.5]);
     h(2) = plot(ax, pred(1), pred(2), 'x', 'MarkerSize', 12, 'LineWidth', 2, 'Color', [0.85 0.1 0.1]);
-    h(3) = plot(ax, nxy(1), nxy(2), 'o', 'MarkerSize', 12, 'LineWidth', 2, 'Color', tern(strcmp(verdict, 'GOOD'), [0 0.6 0], [0.9 0.5 0]));
-    legend(ax, h, {'Protocol 1 peak before the move', 'predicted', 'found'}, 'Location', 'eastoutside');
+    h(3) = plot(ax, nxy(1), nxy(2), 'o', 'MarkerSize', 12, 'LineWidth', 2, 'Color', col.(strrep(verdict, ' ', '_')));
+    legend(ax, h, {'Protocol 1 peak before the move', 'predicted', tern(strcmp(verdict, 'NO RESPONSE'), 'largest ON (not a response)', 'found')}, 'Location', 'eastoutside');
     xlabel(ax, 'column'); ylabel(ax, 'row (1 = top)');
-    title(ax, sprintf('%s re-aim %+g deg: %s - found [%g %g], predicted [%.1f %.1f]; dotted: %g-px margin', S.cell, A.actual_deg, verdict, nxy, pred, m), 'Interpreter', 'none');
+    title(ax, {sprintf('%s re-aim %+g deg: %s - %s', S.cell, A.actual_deg, verdict, qtxt), ...
+        sprintf('found [%g %g], predicted [%.1f %.1f]; dashed: the scan; dotted: %g-px margin', nxy, pred, m)}, 'Interpreter', 'none', 'FontSize', 9);
     exportgraphics(fig, png, 'Resolution', 110);
     if ~vis, close(fig); else, drawnow; end
 catch err
@@ -810,22 +914,28 @@ end
 
 function B = build_p1_confirm_package(pattern_file, pred, out_dir, opts, tag)
 % p1_confirm/: the Protocol 1 square pattern copied as pattern 1 (same frames, so the frame numbers and
-% rapid_p1_peak work as on Protocol 1; it never edits the Protocol 1 package), its ON and OFF squares whose
-% center lies within reaim_window_px of PRED, Protocol 1's flash and gray durations, one position function
-% per repeat (1 s gray, then the squares in a random order, seeded from the cell tag), 2 s gray pretrial
-% and posttrial.
+% rapid_p1_peak work as on Protocol 1; it never edits the Protocol 1 package). reaim_confirm 'full': every ON
+% square of the pattern; 'window': its ON and OFF squares whose center lies within reaim_window_px of PRED.
+% Protocol 1's flash and gray durations, one position function per repeat (1 s gray, then the squares in a
+% random order, seeded from the cell tag), 2 s gray pretrial and posttrial.
 q = load(pattern_file); Pats = q.pattern.Pats; n_frames = size(Pats, 3);
-cx = nan(1, n_frames); cy = nan(1, n_frames); is_on = false(1, n_frames);
+cx = nan(1, n_frames); cy = nan(1, n_frames); is_on = false(1, n_frames); ext = nan(n_frames, 4);
 bkg = mode(reshape(Pats(:, :, 1), 1, []));
 for f = 2:n_frames
     [r, c] = find(Pats(:, :, f) ~= bkg);
     if isempty(r), continue; end
     cx(f) = median(c); cy(f) = median(r); is_on(f) = max(reshape(Pats(:, :, f), 1, [])) > bkg;
+    ext(f, :) = [min(r) max(r) min(c) max(c)];
 end
+mode_ = opts.reaim_confirm;
 w = opts.reaim_window_px; if isscalar(w), w = [w w]; end
-sel = abs(cx - pred(1)) <= w(1) & abs(cy - pred(2)) <= w(2);
+if strcmp(mode_, 'full')
+    sel = is_on;                                                % every ON square of the Protocol 1 pattern, no OFF
+else
+    sel = abs(cx - pred(1)) <= w(1) & abs(cy - pred(2)) <= w(2);
+end
 frames = find(sel);
-if ~any(sel & is_on), error('run_session:stop', 're-aim confirmation: no square of %s within %s px of col/row %s', pattern_file, mat2str(w), mat2str(pred, 4)); end
+if ~any(sel & is_on), error('run_session:stop', 're-aim confirmation: no ON square of %s to scan (%s, %s px of col/row %s)', pattern_file, mode_, mat2str(w), mat2str(pred, 4)); end
 [src_dir, nm] = fileparts(pattern_file);
 if ~isempty(regexp(nm, '^\d{4}_', 'once')), stem = ['0001_' nm(6:end)]; src_id = str2double(nm(1:4)); else, stem = ['0001_' nm]; src_id = NaN; end
 dirs = new_package_dir(out_dir);
@@ -858,11 +968,15 @@ pat = struct('id', 1, 'stem', stem, 'x_num', n_frames, 'y_num', 1, 'gs_val', 4, 
 write_current_exp(out_dir, pat, pfn, []);
 write_json(fullfile(dirs.rep, 'rows.json'), struct('rows', rows, 'cleanup', struct('pattern_id', 1, 'gray_pfn_id', 1, 'zero_afn_id', 0), 'programmed_s', programmed));
 write_csv(fullfile(dirs.rep, 'event_ledger.csv'), eh, er);
-win = struct('col', [pred(1) - w(1), pred(1) + w(1)], 'row', [pred(2) - w(2), pred(2) + w(2)]);
+if strcmp(mode_, 'full')                                        % the scanned area, pixel edges
+    win = struct('col', [min(ext(frames, 3)) - 0.5, max(ext(frames, 4)) + 0.5], 'row', [min(ext(frames, 1)) - 0.5, max(ext(frames, 2)) + 0.5]);
+else
+    win = struct('col', [pred(1) - w(1), pred(1) + w(1)], 'row', [pred(2) - w(2), pred(2) + w(2)]);
+end
 write_json(fullfile(dirs.rep, 'config.json'), struct('schema', 'run_session/2', 'protocol', 'Protocol 1 re-aim confirmation', 'cell', tag, ...
-    'generated', iso_now(), 'pattern_from', pattern_file, 'predicted_xy', pred, 'window', win, 'frames', frames, 'repeats', opts.reaim_reps, ...
+    'generated', iso_now(), 'pattern_from', pattern_file, 'mode', mode_, 'predicted_xy', pred, 'window', win, 'frames', frames, 'repeats', opts.reaim_reps, ...
     'flash_s', opts.reaim_flash_s, 'gray_s', opts.reaim_gray_s, 'settle_s', settle_s, 'programmed_duration_s', programmed));
-B = struct('folder', out_dir, 'pattern', fullfile(dirs.pat, [stem '.mat']), 'frames', frames, 'on_frames', frames(is_on(frames)), ...
+B = struct('folder', out_dir, 'mode', mode_, 'pattern', fullfile(dirs.pat, [stem '.mat']), 'frames', frames, 'on_frames', frames(is_on(frames)), ...
     'n_positions', sum(is_on(frames)), 'cx', cx, 'cy', cy, 'window', win, 'programmed_s', programmed);
 end
 

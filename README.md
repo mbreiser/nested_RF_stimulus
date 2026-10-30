@@ -100,6 +100,9 @@ Stimulus grids and timing: [src/analysis/README.md](src/analysis/README.md).
   (dark, Protocol 1, two-stage Protocol 2, Prot3b, Protocol 4) through `run_session`; its specification is the hand-over
   `docs/briefs/JY_PROTOCOL_HANDOVER_20261026.md` in `ephys-standard-analysis`. A Claude session can supervise it (read-only, except a tested fix of a
   bug that stops the session, on a fix branch): [docs/EXPERIMENT_SIDECAR.md](docs/EXPERIMENT_SIDECAR.md), with a map of the code.
+  On branch `feat/arena-reaim` the launcher is `Auto_T4_v2` (`run_session_v2`, with the arena re-aim:
+  [docs/notes/ARENA_REAIM_20261029.md](docs/notes/ARENA_REAIM_20261029.md)); `Auto_T4_v1` is not on that branch and runs
+  from `feat/session-progress-plots` only.
 - [Full instructions and troubleshooting](https://leburnett.github.io/reiser-documentation/Ephys/ephys_nested_rf.html) — the canonical step-by-step guide.
 - [`G4_Display_Tools`](https://github.com/leburnett/G4_Display_Tools) — arena control.
 

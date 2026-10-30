@@ -2,8 +2,13 @@ function S = Auto_T4_v2(tag, side, varargin)
 %AUTO_T4_V2  The Auto_T4_v2 protocol: one cell's session on the rig from one command (checks, the arena viewer,
 %   run_session_v2; 29 Oct 2026). Auto_T4_v1 with the arena re-aim after Protocol 1 (run_session_v2 instead of
 %   run_session; this worktree and branch feat/arena-reaim). Auto_T4_v1 and run_session are unchanged and stay
-%   the fallback, from C:\matlabroot\GitHub\nested_RF_stimulus_session_ui:  Auto_T4_v1(tag, side)
+%   the fallback, from C:\matlabroot\GitHub\nested_RF_stimulus_session_ui only (Auto_T4_v1.m is not on this
+%   branch since 30 Oct, so it can never run from here):
+%       addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation')
+%       Auto_T4_v1(tag, side)
 %   A session folder started by one version is resumed only by the same version (the step lists differ).
+%   When Auto_T4_v2 returns, fails or is stopped (Ctrl-C), the path is as it was before the call without any
+%   folder of this checkout, the addpath typed before it included: type both lines for every call.
 %
 %   In MATLAB on the rig PC, after break-in (current clamp, 0 pA):
 %       addpath('C:\matlabroot\GitHub\nested_RF_stimulus_reaim\src\protocol_generation')
@@ -15,7 +20,7 @@ function S = Auto_T4_v2(tag, side, varargin)
 %       Auto_T4_v2('JY1028a', 'L', 'check_only', true)
 %
 %   What it does:
-%     1. puts this repository's src first on the path (restored when it returns or is stopped) and checks
+%     1. puts this repository's src first on the path and checks
 %        that run_session_v2, the Protocol 2 generators and the read-outs come from it, that the real
 %        PanelsController and G4_Display_Tools are there, the Host configuration (ADC1 and ADC2 at 10 kHz,
 %        3 rows; it is checked, not edited) and the free disk space;
@@ -34,6 +39,10 @@ function S = Auto_T4_v2(tag, side, varargin)
 %   'feat/arena-reaim' ('' skips the check). Any other option goes to run_session_v2
 %   ('abandon', 'center', 'peak_frame', 'age', 'strain', ...; see help run_session_v2).
 
+src = fileparts(fileparts(mfilename('fullpath')));
+repo = fileparts(src);
+old_path = path;
+restore = onCleanup(@() restore_path(old_path, repo)); %#ok<NASGU>   % first: every exit restores the path
 o = struct('root', 'D:\nested_RF_sessions', 'p1_package', '', 'viewer', true, 'check_only', false, ...
     'branch', 'feat/arena-reaim');
 pass = {};
@@ -49,10 +58,6 @@ if isempty(o.p1_package)
 end
 
 %% 1. path and checks
-src = fileparts(fileparts(mfilename('fullpath')));
-repo = fileparts(src);
-old_path = path;
-restore = onCleanup(@() path(old_path)); %#ok<NASGU>
 addpath(genpath(src));
 if ~isempty(o.branch)
     g = fullfile(repo, '.git');
@@ -118,6 +123,16 @@ opts = [{'cell', tag, 'side', side, 'p1_package', o.p1_package, ...
     'host_config_file', fullfile(exp, 'not edited (checked by Auto_T4_v2)'), 'show_figures', true, 'show_status', true}, pass];
 S = run_session_v2(exp, opts{:});
 fprintf('\nSession folder %s\n', exp);
+end
+
+function restore_path(old_path, repo)
+% The path as before the call, without this checkout's folders: the addpath typed before Auto_T4_v2 does not
+% linger, so a later Auto_T4_v1 or run_session comes from its own checkout (JY1030a, 29 Oct: a lingering
+% re-aim path made MATLAB run the wrong Auto_T4_v1).
+path(old_path);
+p = strsplit(path, pathsep);
+mine = p(strcmpi(p, repo) | startsWith(lower(p), lower([repo filesep])));
+if ~isempty(mine), rmpath(mine{:}); end
 end
 
 function v = tern(c, a, b)

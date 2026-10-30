@@ -19,6 +19,18 @@ Everything below is written for both: where it says `Auto_T4_v1`, `run_session.m
 for v1, steps 6–12 are numbered 4–10. A session folder is resumed by the version that started it (`Auto_T4_v2`
 refuses a v1 folder). If v2 fails in a way that cannot be resumed, the fallback is `Auto_T4_v1` on a **new tag**.
 
+**The path (since 30 Oct).** `Auto_T4_v1.m` exists only in `_session_ui`; the `_reaim` checkout no longer has a copy.
+When `Auto_T4_v2` returns, fails or is stopped, it takes every `_reaim` folder off the MATLAB path, including the
+`addpath` typed before it. So every call is two lines, the `addpath` and then the launcher, typed together, and the
+fallback is always:
+```matlab
+addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation')
+Auto_T4_v1('<TAG>', 'L')
+```
+If in doubt about what is on the path (`which Auto_T4_v1` should name `_session_ui`), restart MATLAB and type the two
+lines. On 29 Oct at 17:12 a `_reaim` path left over from a v2 run made MATLAB pick the `_reaim` copy of `Auto_T4_v1`,
+which refused to start ("... is on feat/arena-reaim, not feat/session-progress-plots").
+
 ## 1. Your role
 
 Jin Yong runs the experiment. You watch it and keep a record. You read the session's log files as they are written,
@@ -72,9 +84,10 @@ plainly when something needs action, and say nothing extra when everything is no
    ```matlab
    addpath('C:\matlabroot\GitHub\nested_RF_stimulus_reaim\src\protocol_generation'); Auto_T4_v2('<TAG>', 'L')
    ```
-   The fallback (the last working version, no re-aim):
+   The fallback (the last working version, no re-aim), two lines; restart MATLAB first if in doubt:
    ```matlab
-   addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation'); Auto_T4_v1('<TAG>', 'L')
+   addpath('C:\matlabroot\GitHub\nested_RF_stimulus_session_ui\src\protocol_generation')
+   Auto_T4_v1('<TAG>', 'L')
    ```
 
 ## 4. What to read during the session
@@ -135,7 +148,7 @@ Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice wide
 | 2 | `p1`: Protocol 1 coarse map | 6.2 min | `Overview p1`: Vm (−67 mV on 28 Oct). `FLAG p1: Vm drifted ±D mV` fires above 5 mV of drift. |
 | 3 | `p1_peak` | seconds | `DECISION p1_peak/aim: frame F at col/row [c r]`. Uses the 6-px grid peak when ≥ 2 mV, else the 12-px grid (FLAG). Below 2 mV on both grids the session **stops** (`FLAG session stopped at p1_peak: Protocol 1 peak ... below the floor ...`): no usable response, so Jin Yong decides (new cell, or a `'peak_frame'` override). |
 | 4 | `reaim`: arena re-aim check | seconds; 1–2 min when it fires | Normal for most cells: `DECISION reaim/edge_check: no re-aim: A px above and B px below the peak (>= 14)`, and step 5 is skipped (`Step p1_confirm skipped: no re-aim`). **When it fires** (`DECISION reaim/edge_check: RE-AIM: peak D px from the top/bottom edge (< 14)`), the session **waits for Jin Yong** at a boxed `RE-AIM THE ARENA` prompt in their MATLAB (see section 5a). That wait is expected, not a hang. |
-| 5 | `p1_confirm`: quick Protocol 1 at the re-aimed RF, then the figure and Jin Yong's choice | about 0.7 min plus the choice, only after a rotation | `DECISION p1_confirm/confirm: GOOD: found col/row [c r], predicted [c r] (row offset ±x px); Protocol 2 is aimed there` is a good confirmation. `FLAG DECISION p1_confirm/confirm: CHECK: ...` lists what was off (section 5a). |
+| 5 | `p1_confirm`: Protocol 1 ON scan of the whole Protocol 1 area at the new angle, then the figure and Jin Yong's choice | about 1.6 min plus the choice, only after a rotation | `DECISION p1_confirm/confirm: GOOD: found col/row [c r] (X mV, SNR Y (needs 4), Z x the peak before the move (needs 0.5)), predicted [c r]; Protocol 2 is aimed there` is a good confirmation. `FLAG ... CHECK` (peak on the scan's outer row or column) and `FLAG ... NO RESPONSE` (Protocol 2 **not** aimed there; Jin Yong must choose) are in section 5a. |
 | 6 | `p2a`: Protocol 2 stage 1, the sweeps | 8.3 min | `Overview p2a`. Watch for the drift FLAG. After a re-aim, the `Protocol 2 package generated for peak frame F ... aimed at col/row [c r]` line must show the **confirmed** position, not the Protocol 1 one. |
 | 7 | `readout1` | seconds | `DECISION readout1/placement_pd: placement PD X deg (rule mean ...)`. Normal: rule `mean`, 28 and 56 °/s within a few degrees (1.1° on 28 Oct). Rule `28_only` means they differ by more than 10°: note it. `usable_pd: stage 2 plays the 22 bars` is normal. `FLAG stage 2 fallback: all 88 bars as today (N rows, M min)` makes step 8 last M min instead of 2: tell Jin Yong. |
 | 8 | `p2b`: stage 2, 22 bars × 3 | 2.2 min | |
@@ -169,43 +182,68 @@ wait at this prompt is normal. Do not report it as a hang.
 - `reaim/rotation`: the angle wanted, suggested and actually moved, whether it was clamped, the stage reading
   before and after, the sign convention, and the predicted new col/row. Flags: `moved X deg, suggested Y`,
   `clamped ...`, `operator_skip`, `stage_at_limit`.
-- `p1_confirm/confirm`: the predicted and found col/row, the offset, and ΔV before and after.
-
+- `p1_confirm/confirm`: the scan's ON peak (frame, col/row, mV), its SNR and noise, the ratio to the Protocol 1 peak
+  before the move, which QC tests passed (`qc`), the predicted col/row and the offset.
 - `p1_confirm/gate`: Jin Yong's choice after the figure (below).
 
-**The check** takes about 40 s: 20 squares × ON/OFF × 2 repeats at 200 + 150 ms, plus 2 s of gray before and
-after. Then a figure opens and is saved as `plots\p1_confirm_reaim_<time>.png`. It shows the arena with the window's
-ON ΔV map, the dotted 14-px margins, the Protocol 1 peak before the move (gray square), the predicted position
-(red ×) and the found peak (green ○ when GOOD, orange when CHECK). Jin Yong then chooses in the command window:
+**The check** (since 30 Oct) is an ON-only scan of the **whole Protocol 1 area** at the new angle: every ON square
+of the Protocol 1 pattern (6-px LHS grid: 128 squares, columns 17–112, rows 1–48), 2 repeats at 200 + 150 ms, 1 s
+of gray before each repeat and 2 s before and after. It takes **95.6 s (1.6 min)**. The peak comes from the full
+map, so it is found even when the predicted angle was wrong. The 29 Oct version, a ±12-px window of ON and OFF
+squares around the prediction (about 35 s), is still available as `'reaim_confirm', 'window'`.
+
+**The QC: the peak must be real.** On 29 Oct (JY1030a) the window check reported `GOOD` at 3.0 mV with SNR 1.7.
+That was noise: the mean of 2 repeats has about 1.4 mV of noise, so the largest of many squares of noise alone is
+about 3 mV, over the 2 mV floor. Protocol 2 was then aimed at noise. Now the scan's ON peak counts as a response only
+when:
+- (a) its SNR (computed as `rapid_p1_peak` computes `snr_mean`) is at least `reaim_min_snr` (4), and
+- (b) it is at least `reaim_min_frac` (0.5) × the Protocol 1 ON peak before the move (and at least 2 mV).
+
+A response is **GOOD** when (c) it is not on the scan's outer row or column. It is **CHECK** when it is: it is still
+used, but the RF may lie beyond the screen or the grid. If (a) or (b) fails, the verdict is **NO RESPONSE** and
+Protocol 2 is **not** aimed there. The offset from the predicted position is only a geometry flag, never a failure
+(the angle per pixel and any column shift are being measured on the bench, 30 Oct).
+
+**The figure** opens and is saved as `plots\p1_confirm_reaim_<time>.png`. It shows the arena with the scan's ON ΔV
+map, the scanned area (dashed), the dotted 14-px margins, the Protocol 1 peak before the move (gray square), the
+predicted position (red ×) and the found peak: green ○ GOOD, orange CHECK, red "largest ON (not a response)" for
+NO RESPONSE. The title and the prompt give the mV, the SNR and the ratio. Jin Yong then chooses in the command window.
+
+After GOOD or CHECK:
 - **Enter**: continue, with Protocol 2 aimed at the found peak.
-- **c**: repeat the check, same window, stage unmoved.
+- **c**: repeat the scan, stage unmoved.
 - **a**: re-aim again from the found peak, with the stage where it is. Offered only when the found peak is still
   near the edge.
-- **s**: stop the session. The same command resumes it: the check runs again, then the same choice.
+- **s**: stop the session. The same command resumes it: the scan runs again, then the same choice.
 
-`Running again from step ...` in the log follows `c` or `a`. The status table then shows the step pending again.
-Waiting at this choice is normal.
+After NO RESPONSE (Enter is not a choice here):
+- **c**: repeat the scan, stage unmoved.
+- **r**: rotate the stage back to the reading before the move (the prompt names it, then Enter), and the re-aim is
+  asked again.
+- **p**: rotate the stage back to that reading (then Enter) and go on with the Protocol 1 peak from before the move.
+- **s**: stop. To be asked the re-aim again on resume: rotate back and add `'reaim_reset', true` (and
+  `'reaim_sign', -1` if the base turned the wrong way). The same command without it repeats the scan.
 
-The confirmation package and its event ledger are in `<TAG>\p1_confirm\`. The Protocol 1 peak from before the move
-is kept in `session_state.json` under `out.p1_peak.before_reaim`.
+`Running again from step ...` in the log follows `c`, `a` or `r`. The status table then shows the step pending
+again. Waiting at this choice is normal.
 
-**A good confirmation:** `GOOD`. The found row is within 6 px (one 6-px square) of the predicted row, the peak is not
-on the confirmation window's outer squares, it has ≥ 14 px of screen on both sides, and its ΔV is comparable to
-the Protocol 1 peak's. Report it in one line, for example: *"Re-aimed +18.5°, RF found at row 21.5 (predicted
-24.3), 7 mV; Protocol 2 aimed there."*
+The confirmation package and its event ledger are in `<TAG>\p1_confirm\`, and the read-out is in
+`<TAG>\readout\p1_confirm\`. The Protocol 1 peak from before the move is kept in `session_state.json` under
+`out.p1_peak.before_reaim`.
 
-**A bad confirmation:** `FLAG ... CHECK`, with the reasons in the flags:
-- `moved the OPPOSITE way to the prediction: reaim_sign is wrong`. Tell Jin Yong. The aim is still right,
-  because it uses the measured peak. The sign must be fixed (`'reaim_sign', -1`) before the next cell.
-- `moved +a rows, predicted +b`: the degrees-per-pixel or the angle typed is off. Note both numbers.
-- `peak on the window's edge`: the RF may lie beyond the 25 × 25-px window. The aim is uncertain, so watch the
+**A good confirmation:** `GOOD`, SNR well over 4, a ratio near 1. Report it in one line, for example:
+*"Re-aimed +18.5°, RF found at row 21.5 (predicted 24.3), 7.4 mV, SNR 11, 0.9 × before; Protocol 2 aimed there."*
+
+**Flags to report** (in brackets after the decision):
+- `geometry: found [dc dr] px (col, row) from the prediction ...` or `geometry: moved the OPPOSITE way ...: reaim_sign is
+  wrong`. The aim is still right, because it uses the measured peak. Note the numbers for the bench calibration.
+- `peak on the outer row or column of the scan`: the verdict is CHECK. The aim is uncertain, so watch the
   `readout/center` check later.
 - `still near the edge`: the rotation was not enough, for example because it was clamped.
-- **No response:** `FLAG session stopped at p1_confirm: no response above 2 mV in the re-aim window ...`. Either the
-  base turned the wrong way (the RF went toward or past the edge) or the cell is lost. Check the Vm in
-  `Overview p1_confirm`. If the cell is fine, Jin Yong rotates the base back to the reading before the re-aim and
-  resumes with `'reaim_reset', true` (and `'reaim_sign', -1` if the direction was wrong). The prompt then comes
-  again.
+- **NO RESPONSE** with `SNR x < 4` and/or `peak x mV < y mV (r x the ... before the move; needs 0.5 x)`. Either the
+  cell is going (check the Vm in `Overview p1_confirm`), or the RF went off the screen. Tell Jin Yong the SNR and the
+  ratio. Usually the best choice is **p** (the cell is still recorded at the old angle, with the edge peak), or
+  **r** to try the rotation again.
 
 **Signs the cell is going** (run 2 on 28 Oct is the example): Vm climbing step after step (−41 → −25 mV), drift
 FLAGs on consecutive steps, R_gray falling (13 → 5.4 GΩ), Prot3b pairs and Protocol 4 passes rejected. Say so
@@ -217,7 +255,9 @@ early and give the numbers. Whether to continue is Jin Yong's call.
 |---|---|---|
 | `Step X FAILED: <msg>` | the session stopped; the arena is cleaned up | Quote the message and the stack from `Auto_T4_v1_*.log`. **The same command resumes** (`Auto_T4_v1('<TAG>', 'L')`): run_session re-runs the failed step and continues. If the same step fails twice, or the message points at the code (an index or frame error, like `stage-2 frames outside 2..89` on 28 Oct), do not resume blindly: find the cause in the code (section 10), record it as a bug (section 7), and offer Jin Yong a fix (section 11). |
 | `FLAG session stopped at <step>: ...` (e.g. after `p1_peak`) | run_session stopped on purpose (the step is `interrupted`), e.g. no usable Protocol 1 response | New cell, or a `'peak_frame'` override, at Jin Yong's choice. |
-| `FLAG session stopped at p1_confirm: no response ...` | nothing in the re-aim window: wrong rotation direction, or the cell is lost | Section 5a: rotate the base back, then resume with `'reaim_reset', true` (and `'reaim_sign', -1` if the base turned the wrong way). |
+| `FLAG DECISION p1_confirm/confirm: NO RESPONSE ...`, then the choice c / r / p / s | the re-aim scan has no real response (SNR or amplitude too low): the RF left the screen, or the cell is going | Section 5a. Give the SNR and the ratio. `p` goes on at the old angle with the old peak; `r` tries the rotation again. |
+| `FLAG session stopped at p1_confirm: no response in the re-aim scan; stopped by the operator ...` | Jin Yong chose `s` after NO RESPONSE | Rotate the base back, then resume with `'reaim_reset', true` (and `'reaim_sign', -1` if the base turned the wrong way). |
+| `Unrecognized function or variable 'Auto_T4_v1'`, or `Auto_T4_v1: ... is on feat/arena-reaim` | the `_session_ui` folder is not first on the path | Section 0: type the `_session_ui` `addpath` line, then `Auto_T4_v1`. If in doubt, restart MATLAB first. |
 | `run_session:controller`, `startDisplay did not confirm`, Host errors | rig communication problem | Stop. Do not suggest workarounds on the hardware. Record it. Resuming is Jin Yong's decision. |
 | Ctrl-C in their MATLAB | the step is interrupted, with controller cleanup | The same command resumes. |
 | the cell is lost | | `Auto_T4_v1('<TAG>', 'L', 'abandon', true)` closes the session. The next cell gets a **new tag**. |
@@ -274,7 +314,7 @@ there.
 
 | what | where (under `src\`) |
 |---|---|
-| the command Jin Yong runs: checks, the viewer, then run_session | `protocol_generation\Auto_T4_v1.m` |
+| the command Jin Yong runs: checks, the viewer, then run_session | `protocol_generation\Auto_T4_v1.m` (in `_session_ui` only) |
 | the sequencer: state, resume, decisions, the log, the step loop | `protocol_generation\run_session.m` (main function) |
 | `dark30`, `p1` | `run_session.m`: `step_dark30`, `step_p1`, `rows_from_g4p`, `run_rows` |
 | `p1_peak` | `run_session.m`: `step_p1_peak`, `p1_square_patterns`, `frame_to_xy`; the read-out `analysis\protocol2\rapid_p1_peak.m` |
@@ -290,7 +330,7 @@ there.
 | mock controller for the dry runs | `protocol_generation\SessionMockController.m` |
 | tests (the ones section 11 runs) | `test_protocols\test_run_session_dry.m`, `test_run_session_replay_jy.m`, `test_run_session_p1_aim.m`, `test_session_plots.m` (`test_run_session_joint.m` only runs on a Mac) |
 | **v2 only**: the launcher and the sequencer | `protocol_generation\Auto_T4_v2.m`, `run_session_v2.m` (a copy of `run_session.m` with the re-aim; the function names above are the same in it) |
-| **v2 only**: `reaim`, `p1_confirm` | `run_session_v2.m`: `step_reaim`, `step_p1_confirm` (the gate after the figure), `build_p1_confirm_package`, `plot_reaim_confirm`, `reaim_reset` |
+| **v2 only**: `reaim`, `p1_confirm` | `run_session_v2.m`: `step_reaim`, `step_p1_confirm` (the QC and the gate after the figure), `confirm_snr`, `build_p1_confirm_package`, `plot_reaim_confirm`, `reaim_reset`; `Auto_T4_v2.m`: `restore_path` (takes the `_reaim` folders off the path at every exit) |
 | **v2 only**: tests | `test_run_session_reaim.m`, `test_run_session_v2_dry.m` (run them with the four above, which test v1's `run_session.m`) |
 
 Outside this repository (read only, never edit, even in a fix):
