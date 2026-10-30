@@ -34,6 +34,8 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
 %       .ortho_flash_col   - Bar flash column for orthogonal orientation (1-8)
 %       .ortho_orientation - Orthogonal bar orientation in degrees
 %       .pos_order         - 1x11 spatial ordering array (ND side to PD side)
+%       .ortho_pos_order   - 1x11 spatial ordering for orthogonal axis
+%                            (right-hand rule: 90° CW from PD defines +)
 %
 %   VECTOR SUM METHOD:
 %     The preferred direction is computed as the angle of the weighted
@@ -65,6 +67,7 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
 
     pd_data_row   = plot_order(pd_subplot_idx);
     pd_direction  = lut_directions(pd_data_row);
+    pd_direction_vs = mod(rad2deg(resultant_angle), 360);   % continuous vector-sum angle, before snapping
     pd_orientation = lut_orientations(pd_data_row);
     pd_pattern    = lut_patterns(pd_data_row);
     pd_function   = lut_functions(pd_data_row);
@@ -75,16 +78,42 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
 
     % Orthogonal orientation: 4 columns away (wraps around 8 orientations)
     ortho_flash_col = mod(bar_flash_col - 1 + 4, 8) + 1;
-    ortho_exp_pat = ortho_flash_col + pattern_offset;
-    ortho_mask = Tbl.pattern == ortho_exp_pat & Tbl.function == 3;
-    ortho_orientation = Tbl.orientation(ortho_mask);
+    ortho_exp_pat   = ortho_flash_col + pattern_offset;
 
-    % Determine spatial ordering (ND to PD, left to right)
+    % Locate one orthogonal LUT row (prefer function==3, fall back to any odd function).
+    % We derive both ortho_orientation and ortho_dir_fwd from the SAME row so the two
+    % stay consistent in the rare fallback case.
+    ortho_fwd_mask = Tbl.pattern == ortho_exp_pat & Tbl.function == 3;
+    if any(ortho_fwd_mask)
+        ortho_lut_idx = find(ortho_fwd_mask, 1);
+    else
+        ortho_odd_mask = Tbl.pattern == ortho_exp_pat & mod(Tbl.function, 2) == 1;
+        if ~any(ortho_odd_mask)
+            error('find_pd_from_lut:NoOrthoLutRow', ...
+                'No LUT row found for orthogonal pattern %d (any odd function).', ortho_exp_pat);
+        end
+        ortho_lut_idx = find(ortho_odd_mask, 1);
+    end
+    ortho_orientation = Tbl.orientation(ortho_lut_idx);
+    ortho_dir_fwd     = Tbl.direction(ortho_lut_idx);
+
+    % Determine PD spatial ordering (ND to PD, left to right)
     is_forward = mod(pd_function, 2) == 1;
     if is_forward
         pos_order = 1:11;
     else
         pos_order = 11:-1:1;
+    end
+
+    % Determine ortho spatial ordering via right-hand rule.
+    % Right-hand rule: 90 deg clockwise from PD defines the positive ortho direction.
+    rh_target = mod(pd_direction - 90, 360);
+    ang_diff  = abs(ortho_dir_fwd - rh_target);
+    ang_diff  = min(ang_diff, 360 - ang_diff);  % handle wraparound
+    if ang_diff < 90
+        ortho_pos_order = 1:11;
+    else
+        ortho_pos_order = 11:-1:1;
     end
 
     % Print summary
@@ -106,10 +135,13 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
     end
     fprintf('PD function %d is %s → position order: %s\n', ...
         pd_function, dir_label, mat2str(pos_order));
+    fprintf('Ortho pos_order: %s (right-hand-rule target: %.1f°, ortho fwd: %.1f°)\n', ...
+        mat2str(ortho_pos_order), rh_target, ortho_dir_fwd);
 
     % Pack into output struct
     pd_info.resultant_angle   = resultant_angle;
     pd_info.pd_direction      = pd_direction;
+    pd_info.pd_direction_vs = pd_direction_vs;
     pd_info.pd_orientation    = pd_orientation;
     pd_info.pd_pattern        = pd_pattern;
     pd_info.pd_function       = pd_function;
@@ -118,5 +150,6 @@ function pd_info = find_pd_from_lut(max_v, lut_directions, lut_orientations, ...
     pd_info.ortho_flash_col   = ortho_flash_col;
     pd_info.ortho_orientation = ortho_orientation;
     pd_info.pos_order         = pos_order;
+    pd_info.ortho_pos_order   = ortho_pos_order;
 
 end
