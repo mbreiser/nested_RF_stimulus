@@ -140,7 +140,9 @@ table below before you worry.
 
 ## 5. The session, step by step
 
-Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice widened on 29 Oct. Total about 42 min.
+Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice widened on 29 Oct. Total about 42 min
+for v1. **v2 since 30 Oct** (section 9): stage 2 plays 30 bars instead of 22 (+0.6 min): about 42.6 min, plus the
+re-aim when it fires.
 
 | # | step | takes | check, and what is normal |
 |---|---|---|---|
@@ -150,8 +152,8 @@ Durations are from 28 Oct, plus about 1.1 min in Protocol 4 for the lattice wide
 | 4 | `reaim`: arena re-aim check | seconds; 1–2 min when it fires | Normal for most cells: `DECISION reaim/edge_check: no re-aim: A px above and B px below the peak (>= 14)`, and step 5 is skipped (`Step p1_confirm skipped: no re-aim`). **When it fires** (`DECISION reaim/edge_check: RE-AIM: peak D px from the top/bottom edge (< 14)`), the session **waits for Jin Yong** at a boxed `RE-AIM THE ARENA` prompt in their MATLAB (see section 5a). That wait is expected, not a hang. |
 | 5 | `p1_confirm`: Protocol 1 ON scan of the whole Protocol 1 area at the new angle, then the figure and Jin Yong's choice | about 1.6 min plus the choice, only after a rotation | `DECISION p1_confirm/confirm: GOOD: found col/row [c r] (X mV, SNR Y (needs 4), Z x the peak before the move (needs 0.5)), predicted [c r]; Protocol 2 is aimed there` is a good confirmation. `FLAG ... CHECK` (peak on the scan's outer row or column) and `FLAG ... NO RESPONSE` (Protocol 2 **not** aimed there; Jin Yong must choose) are in section 5a. |
 | 6 | `p2a`: Protocol 2 stage 1, the sweeps | 8.3 min | `Overview p2a`. Watch for the drift FLAG. After a re-aim, the `Protocol 2 package generated for peak frame F ... aimed at col/row [c r]` line must show the **confirmed** position, not the Protocol 1 one. |
-| 7 | `readout1` | seconds | `DECISION readout1/placement_pd: placement PD X deg (rule mean ...)`. Normal: rule `mean`, 28 and 56 °/s within a few degrees (1.1° on 28 Oct). Rule `28_only` means they differ by more than 10°: note it. `usable_pd: stage 2 plays the 22 bars` is normal. `FLAG stage 2 fallback: all 88 bars as today (N rows, M min)` makes step 8 last M min instead of 2: tell Jin Yong. |
-| 8 | `p2b`: stage 2, 22 bars × 3 | 2.2 min | |
+| 7 | `readout1` | seconds | `DECISION readout1/placement_pd: placement PD X deg (rule mean ...)`. Normal: rule `mean`, 28 and 56 °/s within a few degrees (1.1° on 28 Oct). Rule `28_only` means they differ by more than 10°: note it. `usable_pd: stage 2 plays the 22 bars` is normal (the text says 22 in v2 too; the stage-2 line of step 8 gives the real count). `FLAG stage 2 fallback: all 88 bars ...` (v2: `all 120 bars (N rows, M min)`) makes step 8 last M min instead of 2–3: tell Jin Yong. |
+| 8 | `p2b`: stage 2, 22 bars × 3 (v2: 30 bars, 15 per set, ±14 px) | 2.2 min (v2: about 2.8) | v2: `Stage 2: 30 bars x 3 repeats (180 flashes), 2.6 min, ...`. |
 | 9 | `readout` | seconds | `Read-out (...): ... center col/row [c r], ... center peak X mV`, then `DECISION readout/center`. Normal: `read-out M6 center; tables shifted by [0 0] px`. `FLAG DECISION readout/center: Protocol 1 peak ...` means the center failed a sanity check (more than 6 px from the Protocol 1 peak, more than 4 px off the bar set, or a center peak below 3 mV). The session continues aimed at the Protocol 1 peak: tell Jin Yong and note it. |
 | 10 | `build` | seconds | `Prot3b: 26 frames, 26 blocks, 7.6 min; Protocol 4: ~450 frames, ~1780 flashes, ~15 min.` `FLAG Prot3b build:` or `FLAG Protocol 4 build:` list squares off the screen. A few is fine; most is not. |
 | 11 | `p3b`: Prot3b, ±0.5 pA via AO2 | 7.8 min | `Analysis p3b: R_gray G GOhm; pairs kept k/8; dR ...`. 28 Oct: 13 GΩ, 6/8, ON center −5.7 GΩ. `FLAG p3b: only k of 8 pairs pass the baseline QC` means fewer than 4 pairs kept: the cell drifted. The cell is not dropped for drift; drift is a result. |
@@ -301,6 +303,13 @@ read-outs), Protocol 4 (lattice peak, passes kept, the trailing hyperpolarizatio
     other, and every block within 5 mV of the first block of its current (agreed 29 Oct). The hand-over's
     wording would reject every pair.
   - **Protocol 4 lattice window:** now s −14…+18 px (it was −12…+16; widened 29 Oct, about 1.1 min more).
+  - **Stage-2 bar flashes, v2 since 30 Oct:** 15 bars per set at 2-px steps (±14 px, `p2_n_flank` 7; the
+    Protocol 2 package's FLASHES pattern has 120 frames instead of 88), so 30 stage-2 bars instead of 22. The
+    bars are still cropped to the 30-px square: at ±14 px a horizontal or vertical bar keeps 60–80 % of its pixels
+    (pattern 13, OFF vertical, only 11 % at −14: its centre frame looks 2 px off), a diagonal one 25–60 % (already
+    47–94 % at ±10). Stage 1 is unchanged. Full mode plays all 120 bars (17.0 instead of 14.6 min). The
+    Python read-out (`rapid_prot2_locations.py`, the fallback when `rapid_readout.m` is missing) still assumes 88
+    bars.
   - **Arena re-aim** (29 Oct, Auto_T4_v2, section 5a). Parameters and the rig test:
     `docs\notes\ARENA_REAIM_20261029.md` in the `_reaim` checkout.
 - Conventions: 1 px = 1.25°; s is positive toward the PD (the trailing side); v is 90° clockwise from the PD.
@@ -331,7 +340,8 @@ there.
 | tests (the ones section 11 runs) | `test_protocols\test_run_session_dry.m`, `test_run_session_replay_jy.m`, `test_run_session_p1_aim.m`, `test_session_plots.m` (`test_run_session_joint.m` only runs on a Mac) |
 | **v2 only**: the launcher and the sequencer | `protocol_generation\Auto_T4_v2.m`, `run_session_v2.m` (a copy of `run_session.m` with the re-aim; the function names above are the same in it) |
 | **v2 only**: `reaim`, `p1_confirm` | `run_session_v2.m`: `step_reaim`, `step_p1_confirm` (the QC and the gate after the figure), `confirm_snr`, `build_p1_confirm_package`, `plot_reaim_confirm`, `reaim_reset`; `Auto_T4_v2.m`: `restore_path` (takes the `_reaim` folders off the path at every exit) |
-| **v2 only**: tests | `test_run_session_reaim.m`, `test_run_session_v2_dry.m` (run them with the four above, which test v1's `run_session.m`) |
+| **v2 only**: tests | `test_run_session_reaim.m`, `test_run_session_v2_dry.m`, `test_run_session_v2_widen.m` (the 30-bar stage 2 on recorded sessions) (run them with the four above, which test v1's `run_session.m`; `test_run_session_replay_jy.m` checks that v1's generated package is still byte-identical) |
+| **v2 only**: the wider stage 2 | `run_session_v2.m`: option `p2_n_flank`, `generate_protocol2_package`; shared, defaults unchanged: `generate_bar_flash_pos_fns.m`, `generate_bar_flash_stimulus_xy.m`, `rapid_readout.m` (bar counts from the FLASHES pattern) |
 
 Outside this repository (read only, never edit, even in a fix):
 - `C:\matlabroot\G4_Display_Tools\`: arena control (`PControl_Matlab\controller\PanelsController.m`) and the

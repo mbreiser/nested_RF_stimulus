@@ -24,10 +24,10 @@ for sp = [1,2]
     % Make 3 different position functions, one for each rep.
     for r = 1:n_reps
     
-        % Random order in which to present flashes.
-        rand_order = randperm(88);
-        % Swap the value of 1 for 89 - first frame is blank
-        rand_order(rand_order==1)=89;
+        % Random order in which to present flashes (n_flank 5: randperm(88), as before 30 Oct 2026).
+        rand_order = randperm(n_frames_pattern);
+        % Swap the value of 1 for the last frame (89 for n_flank 5) - first frame is blank
+        rand_order(rand_order==1)=n_frames_pattern+1;
     
         value_array = zeros(1, 2 * numel(rand_order)); 
         value_array(1:2:end) = 1; 

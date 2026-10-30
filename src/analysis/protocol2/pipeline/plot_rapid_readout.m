@@ -4,10 +4,10 @@ function fig = plot_rapid_readout(P)
 %   FIG = PLOT_RAPID_READOUT(P) draws, from the struct P that RAPID_READOUT
 %   (or RAPID_READOUT_PY) assembles:
 %     left   arena map (1-based columns and rows, row 1 at the top): the 88
-%            bar centers, the PD-axis and orthogonal bar sets, the 4-px
-%            lattice squares, the Protocol 4 core (blue) and line-scan (cyan)
-%            centers, the PD-frame lattice window (P.window; s -14..+18 px /
-%            v +-8 px since 29 Oct 2026), the RF
+%            (or 120, Auto_T4_v2) bar centers, the PD-axis and orthogonal bar
+%            sets, the 4-px lattice squares, the Protocol 4 core (blue) and
+%            line-scan (cyan) centers, the PD-frame lattice window (P.window;
+%            s -14..+18 px, Auto_T4_v2 -14..+22, v +-8 px), the RF
 %            center (M6 x M6), the PD arrow and the 11 Prot3b sites;
 %     middle 80 ms bar-flash profile along the PD axis (s; + = trailing /
 %            proximal) with the post-flash minimum, the window and the sites;
@@ -51,8 +51,9 @@ function fig = plot_rapid_readout(P)
         plot(a, [P.p4_frames(m).col_center], [P.p4_frames(m).row_center], '.', 'Color', [0.09 0.75 0.81], 'MarkerSize', 7);
     end
     h = gobjects(0); lab = {};
-    h(end+1) = plot(a, P.bar_cx, P.bar_cy, '.', 'Color', [0.6 0.6 0.6], 'MarkerSize', 7); lab{end+1} = '88 bar centers';
-    ip = P.g_pd * 11 + (1:11); io = P.g_or * 11 + (1:11);
+    nb = numel(P.bar_cx) / 8;                       % bars per set: 11 (88 bars) or 15 (120 bars, Auto_T4_v2)
+    h(end+1) = plot(a, P.bar_cx, P.bar_cy, '.', 'Color', [0.6 0.6 0.6], 'MarkerSize', 7); lab{end+1} = sprintf('%d bar centers', numel(P.bar_cx));
+    ip = P.g_pd * nb + (1:nb); io = P.g_or * nb + (1:nb);
     h(end+1) = plot(a, P.bar_cx(ip), P.bar_cy(ip), 'o', 'Color', [0.12 0.47 0.71], 'MarkerSize', 5); lab{end+1} = 'perpendicular bar set (PD axis)';
     h(end+1) = plot(a, P.bar_cx(io), P.bar_cy(io), 'o', 'Color', [0.17 0.63 0.17], 'MarkerSize', 5); lab{end+1} = 'parallel bar set (orthogonal axis)';
     % window polygon
@@ -114,8 +115,8 @@ function fig = plot_rapid_readout(P)
             end
         end
         xlabel(b, [labs{j} ' (px)']); ylabel(b, 'mV');
-        if isfield(pr, 'set'), ttl = sprintf('placement-frame set %d, M6 bar %d of 11; gray = window; red = Prot3b sites', pr.set, pr.m6);
-        else, ttl = sprintf('M6 bar %d of 11; gray = window; red = Prot3b sites', pr.m6); end
+        if isfield(pr, 'set'), ttl = sprintf('placement-frame set %d, M6 bar %d of %d; gray = window; red = Prot3b sites', pr.set, pr.m6, nb);
+        else, ttl = sprintf('M6 bar %d of %d; gray = window; red = Prot3b sites', pr.m6, nb); end
         title(b, ttl, 'FontSize', 9);
         legend(b, [hp hu], {'80 ms peak', 'post-flash minimum (150-500 ms)'}, 'FontSize', 7, 'Location', 'best');
     end

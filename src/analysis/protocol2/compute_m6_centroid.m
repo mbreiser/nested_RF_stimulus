@@ -19,8 +19,9 @@ function m6 = compute_m6_centroid(A, area_fraction)
     total_area = sum(A);
 
     if peak_val <= 0 || total_area <= 0
-        m6.centroid     = 6;
-        m6.centroid_int = 6;
+        mid = round((n_pos + 1) / 2);   % the middle position: 6 of 11 (as before 30 Oct 2026), 8 of 15
+        m6.centroid     = mid;
+        m6.centroid_int = mid;
         m6.bump_range   = [1, n_pos];
         m6.bump_width   = n_pos;
         return;

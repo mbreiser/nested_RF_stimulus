@@ -37,11 +37,11 @@ function S = run_session_v2(exp_folder, varargin)
 %     p2a      Protocol 2 stage 1: the five sweep blocks, 16 directions, 3 repeats (about 7.3 min)
 %     readout1 read-out call 1: placement PD (rule: mean of the 28 and 56 deg/s vectors within 10 deg,
 %              otherwise the 28 deg/s vector with a warning; > 5 deg sets a flag), the two bar sets, the
-%              stage-2 frame list and sequence; fallback when no usable PD: stage 2 plays all 88 bars
+%              stage-2 frame list and sequence; fallback when no usable PD: stage 2 plays all the bars
 %              and the sites are placed from the Protocol 1 peak
-%     p2b      Protocol 2 stage 2: the 22 bars at 80 ms and 14 ms, random order per repeat, 3 repeats
-%              (about 1.7 min; 'n_reps_stage2', 5 as the option), a position function on the existing
-%              88-frame bar pattern (no new pattern)
+%     p2b      Protocol 2 stage 2: the 30 bars (15 per set, +/-14 px; since 30 Oct 2026, p2_n_flank 7; 22 with
+%              n_flank 5) at 80 ms and 14 ms, random order per repeat, 3 repeats (about 2.6 min; 'n_reps_stage2',
+%              5 as the option), a position function on the existing 120-frame bar pattern (no new pattern)
 %     readout  read-out call 2: M6 center, window, 11 sites, Prot3b and Protocol 4 tables, the figure;
 %              sanity checks (center within a few px of the Protocol 1 peak and inside the bar set, peak
 %              response above a floor, unimodal profiles when reported); on failure the center falls back
@@ -50,7 +50,7 @@ function S = run_session_v2(exp_folder, varargin)
 %     p3b      Prot3b: 26 blocks, five AO levels on AO2 (7.5 min)
 %     p4       Protocol 4: one randomized sequence with mixed flash periods (about 15 min; lattice
 %              window s -14..+18 px since 29 Oct 2026)
-%   With 'p2_mode','full' Protocol 2 runs as today (all 88 bars in one run, run_protocol2) and the
+%   With 'p2_mode','full' Protocol 2 runs as today (all 120 bars in one run, run_protocol2) and the
 %   read-out is called once at its end; the steps are then dark30, p1, p1_peak, reaim, p1_confirm, p2,
 %   readout, build, p3b, p4.
 %
@@ -89,6 +89,10 @@ function S = run_session_v2(exp_folder, varargin)
 %     readout_dir    folder that already holds those files (dry run, resume)
 %     center         [] | [col row] | 'p1_peak'   the override (never prompted for)
 %     n_reps_stage2  3;  p2_bar_flash_pattern_id  [] = the pattern whose file name holds FLASHES (as run_protocol2)
+%     p2_n_flank     7    bar flashes of the generated Protocol 2 package: 2 n_flank + 1 bars per orientation at
+%                    2-px steps (7: 15 bars, +/-14 px, 120 frames; generate_protocol2 and run_session use 5:
+%                    11 bars, +/-10 px, 88 frames). The bars are still cropped to 30 px, so at +/-14 px a
+%                    cardinal bar keeps 60-80 % of its pixels and a diagonal one 25-60 % (30 Oct 2026)
 %     thresholds: p1_peak_floor_mV 2, pd_vector_length_floor 0.1, center_max_dist_px 6, center_max_offset_px 4,
 %                 peak_floor_mV 3
 %     ao_channel 2, ai_channels [] (the Host's AI TCP stream; [] = off, nothing reads it), adc_rates_hz [0 10000 10000 0], host_config_file, pretrial_s 2,
@@ -308,7 +312,7 @@ d = struct('dry_run', false, 'abandon', false, 'cell', '', 'side', '', 'age', ''
     'reaim', 'auto', 'reaim_margin_px', 14, 'reaim_target_row', 24.5, 'reaim_deg_per_px', 1.25, 'reaim_sign', 1, ...
     'reaim_limit_deg', 20, 'stage_angle_deg', 0, 'reaim_step_deg', 0.5, 'reaim_window_px', [12 12], 'reaim_reps', 2, ...
     'reaim_flash_s', 0.2, 'reaim_gray_s', 0.15, 'reaim_tolerance_px', 6, 'reaim_reset', false, 'operator_answers', {{}}, ...
-    'reaim_confirm', 'full', 'reaim_min_snr', 4, 'reaim_min_frac', 0.5);
+    'reaim_confirm', 'full', 'reaim_min_snr', 4, 'reaim_min_frac', 0.5, 'p2_n_flank', 7);
 if numel(varargin) == 1 && isstruct(varargin{1})
     given = varargin{1};
 else
@@ -359,9 +363,9 @@ end
 function [labels, est] = step_labels(ids)
 L = struct('dark30', {{'30 s dark at 0 pA (break-in)', 0.5}}, 'p1', {{'Protocol 1 (coarse map)', 4.5}}, ...
     'p1_peak', {{'Protocol 1 ON peak (read-out)', 0.2}}, 'reaim', {{'Arena re-aim check (edge RF: rotate)', 0.1}}, ...
-    'p1_confirm', {{'Protocol 1 ON scan after the re-aim', 1.6}},'p2', {{'Protocol 2 (all 88 bars, as today)', 14.6}}, ...
+    'p1_confirm', {{'Protocol 1 ON scan after the re-aim', 1.6}},'p2', {{'Protocol 2 (all 120 bars)', 17.0}}, ...
     'p2a', {{'Protocol 2 stage 1 (sweeps)', 7.3}}, 'readout1', {{'Read-out 1 (placement PD, bar sets)', 0.3}}, ...
-    'p2b', {{'Protocol 2 stage 2 (22 bars)', 1.7}}, 'readout', {{'Read-out 2 (center, sites, tables)', 0.5}}, ...
+    'p2b', {{'Protocol 2 stage 2 (30 bars)', 2.6}},'readout', {{'Read-out 2 (center, sites, tables)', 0.5}}, ...
     'build', {{'Build Prot3b + Protocol 4', 0.5}}, 'p3b', {{'Prot3b (26 blocks, 5 AO levels)', 7.5}}, ...
     'p4', {{'Protocol 4 (combined map)', 15}});
 labels = cellfun(@(id) L.(id){1}, ids, 'UniformOutput', false);
@@ -1008,10 +1012,10 @@ if opts.dry_run
     S.out.p2 = dry_p2_placeholder(S, 'p2', 'full: generate_protocol2_package + run_protocol2 (all 88 bars)');
     return
 end
-[folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root);
-S.out.p2 = struct('folder', folder, 'mode', 'run_protocol2', 'peak_frame', S.out.p1_peak.frame, 'n_reps', opts.n_reps_p2);
+[folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root, opts.p2_n_flank);
+S.out.p2 = struct('folder', folder, 'mode', 'run_protocol2', 'peak_frame', S.out.p1_peak.frame, 'n_reps', opts.n_reps_p2, 'n_flank', opts.p2_n_flank);
 save_state(S, fullfile(S.exp_folder, 'session_state.json'));
-say(S, 'Protocol 2 generated in %s; running (%d reps, all 88 bars).', folder, opts.n_reps_p2);
+say(S, 'Protocol 2 generated in %s; running (%d reps, all %d bars).', folder, opts.n_reps_p2, 8 * (2 * opts.p2_n_flank + 1));
 run_protocol2(folder, pattern_order, func_order, trial_dur, opts.n_reps_p2);   % as today; converts TDMS at the end
 end
 
@@ -1028,9 +1032,9 @@ elseif opts.dry_run && ~opts.p2_generate_in_dry_run
     S.out.p2a = dry_p2_placeholder(S, 'p2a', 'stage 1: generate_protocol2_package, then the sweep rows x n_reps');
     return
 else
-    folder = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root); given = false;
-    say(S, 'Protocol 2 package generated for peak frame %d (%d-px grid, aimed at col/row %s): %s', S.out.p1_peak.frame, getf(S.out.p1_peak, 'grid_px', 6), ...
-        mat2str(getf(S.out.p1_peak, 'aim_xy', [])), folder);
+    folder = generate_protocol2_package(S.out.p1_peak, S.side, p2_metadata(S), opts.p2_package_root, opts.p2_n_flank); given = false;
+    say(S, 'Protocol 2 package generated for peak frame %d (%d-px grid, aimed at col/row %s; bar flashes n_flank %d: %d bars): %s', S.out.p1_peak.frame, ...
+        getf(S.out.p1_peak, 'grid_px', 6), mat2str(getf(S.out.p1_peak, 'aim_xy', [])), opts.p2_n_flank, 8 * (2 * opts.p2_n_flank + 1), folder);
 end
 P = p2_plan(folder, opts);
 for w = P.warnings, say(S, 'FLAG %s', w{1}); end
@@ -1112,12 +1116,14 @@ if strcmp(mode, 'bars22')
     say(S, 'Stage 2: %d bars x %d repeats (%d flashes), %.1f min, pattern %d of the stage-1 package.', ...
         B.n_bars, B.n_reps, B.n_flashes, B.programmed_s/60, B.pattern_id);
 else
-    copy_package(p2a, out_dir);                 % all 88 bars: the package's own bar-flash rows and IDs
-    rows = P.stage2_rows_all88;
+    copy_package(p2a, out_dir);                 % all the bars: the package's own bar-flash rows and IDs
+    rows = P.stage2_rows_all88;                 % (the mode id 'all88' is historical: 120 bars with p2_n_flank 7)
     if ~isfolder(fullfile(out_dir, 'Reports')), mkdir(fullfile(out_dir, 'Reports')); end
     write_json(fullfile(out_dir, 'Reports', 'rows.json'), struct('rows', rows, 'cleanup', struct('pattern_id', rows(1).pattern_id, 'gray_pfn_id', rows(1).pfn_id, 'zero_afn_id', 0), 'programmed_s', sum([rows.duration_s])));
-    B = struct('n_bars', 88, 'n_reps', P.n_reps, 'n_flashes', 88*2*P.n_reps, 'programmed_s', sum([rows.duration_s]), 'pattern_id', P.bar_flash_patterns(1));
-    say(S, 'FLAG stage 2 fallback: all 88 bars as today (%d rows, %.1f min).', numel(rows), B.programmed_s/60);
+    fp = dir(fullfile(p2a, 'Patterns', sprintf('%04d_*.mat', P.bar_flash_patterns(1)))); nbar = 88;
+    if isscalar(fp), q = load(fullfile(fp.folder, fp.name)); nbar = size(q.pattern.Pats, 3) - 1; end
+    B = struct('n_bars', nbar, 'n_reps', P.n_reps, 'n_flashes', nbar*2*P.n_reps, 'programmed_s', sum([rows.duration_s]), 'pattern_id', P.bar_flash_patterns(1));
+    say(S, 'FLAG stage 2 fallback: all %d bars (%d rows, %.1f min).', nbar, numel(rows), B.programmed_s/60);
 end
 S.steps(strcmp({S.steps.id}, 'p2b')).est_min = B.programmed_s / 60;
 status = run_rows(opts, out_dir, rows, [], S);
@@ -1588,14 +1594,17 @@ o = struct('folder', folder, 'mode', 'dry_run', 'state', 'dry_run');
 say(S, 'Dry run: %s skipped (placeholder %s).', id, folder);
 end
 
-function [exp_folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(peak, side, metadata, exp_path)
+function [exp_folder, pattern_order, func_order, trial_dur] = generate_protocol2_package(peak, side, metadata, exp_path, n_flank)
 % Mirrors generate_protocol2 (nested_RF_stimulus, 26 Oct 2026) without its dialog, the run and the
 % Google-sheet export. Keep in step with that file. Needs the rig (G4_Display_Tools, C:\matlabroot paths).
+% One deliberate difference since 30 Oct 2026: N_FLANK (option p2_n_flank, 7 in v2) instead of
+% generate_protocol2's 5, so the bar flashes reach +/-14 px (15 bars per orientation, 120 frames).
 % The package goes to <exp_path>\data\<yyyy_MM_dd_HH_mm> (create_exp_dir_G4), as generate_protocol2's does.
 % PEAK is S.out.p1_peak: aimed at its aim_xy / aim_polarity (the median pixel of the peak frame in the
 % pattern that was analysed, rounded as patt_frame_to_coord rounds); without them (no pattern found) at
 % its 6-px frame through patt_frame_to_coord, generate_protocol2's lookup in the rig's fixed 6-px pattern.
-px_intensity = [4, 0, 15]; px_crop_flash = 30; px_crop_bar = 30; n_flank = 5; n_reps = 3;
+px_intensity = [4, 0, 15]; px_crop_flash = 30; px_crop_bar = 30; n_reps = 3;
+if nargin < 5 || isempty(n_flank), n_flank = 5; end
 if isfield(peak, 'aim_xy') && numel(peak.aim_xy) == 2
     x = int16(peak.aim_xy(1)); y = int16(peak.aim_xy(2)); on_off = lower(peak.aim_polarity);
 else

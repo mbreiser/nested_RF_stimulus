@@ -30,6 +30,9 @@ function R = rapid_readout(session_folder, varargin)
 %   2) it prints the placement PD and writes <cell>_stage1.json,
 %   <cell>_stage2_bars.csv (the 22 bars of the two placement-frame sets as
 %   frames of the 88-frame bar pattern) and <cell>_stage2_sequence.csv.
+%   The bar counts come from the FLASHES pattern itself: 8 sets of 11 bars (88
+%   frames, n_flank 5) or, for Auto_T4_v2 packages since 30 Oct 2026, 8 sets of
+%   15 bars (120 frames, n_flank 7: 30 stage-2 bars, profiles over +/-14 px).
 %   Specifications: docs/briefs/JY_PROTOCOL_HANDOVER_20261026.md (that
 %   repository). One deliberate difference from the Python script since
 %   29 Oct 2026: the Protocol 4 lattice window is s -14..+18 px (LATTICE_WINDOW),
@@ -146,7 +149,7 @@ function R = rapid_readout(session_folder, varargin)
     pp = placement_pd(A, opts.AgreeDeg, opts.FlagDeg);
     bs = bar_sets(A, S, pp.pd_placement);
     if opts.Stage2Test                                           % stage-2 emulation: only the 22 bars of the placement-frame sets were flashed
-        keep = false(1, 88); keep([bs.perp_frames_1based, bs.par_frames_1based]) = true;
+        keep = false(1, S.n_bars); keep([bs.perp_frames_1based, bs.par_frames_1based]) = true;
         A.flash80_amp995(~keep) = NaN; A.flash80_peak(~keep) = 0; A.flash80_under(~keep) = 0;
         A = tutl_axes(A, S); bs = bar_sets(A, S, pp.pd_placement);
     end
@@ -162,7 +165,7 @@ function R = rapid_readout(session_folder, varargin)
         fprintf('read-out call 1: STAGE 1 session (sweeps only, no bar flashes) -> placement PD, bar sets, stage-2 bar list\n');
     else
         if isempty(S2), src2 = ''; else, src2 = sprintf(' [two-stage: sweeps from %s, bar flashes from %s]', session_folder, opts.Stage2); end
-        fprintf('read-out call 2: bar flashes present (%d of 88 bars) -> center from the two placement-frame sets, window, sites, Prot3b and Protocol 4 tables%s\n', n_bars, src2);
+        fprintf('read-out call 2: bar flashes present (%d of %d bars) -> center from the two placement-frame sets, window, sites, Prot3b and Protocol 4 tables%s\n', n_bars, S.n_bars, src2);
     end
     if pp.pd_flag_gt5, flag = sprintf('  [pd_flag_gt5: the speeds disagree by more than %g deg]', opts.FlagDeg); else, flag = ''; end
     fprintf('placement PD %.1f deg: 28 deg/s vector %.1f deg (L = %.2f, DSI %.2f), 56 deg/s vector %.1f deg (L = %.2f, DSI %.2f), differ by %.1f deg -> rule %s%s\n', ...
@@ -177,8 +180,8 @@ function R = rapid_readout(session_folder, varargin)
     if ~bs.have_bars
         %% ------------------------------------------------------------ stage 1: sweeps only -> stage-2 bar list and sequence
         [bars, seq2, total2] = stage2_tables(S, bs);
-        fprintf('STAGE 1 session (no bar flashes). Stage 2: %d bars (frames of the 88-frame bar pattern) x 80 ms (+920) and 14 ms (+486), 3 repeats = %.1f min (5 repeats: %.1f min)\n', ...
-            numel(bars), total2 / 60, total2 / 60 * 5 / 3);
+        fprintf('STAGE 1 session (no bar flashes). Stage 2: %d bars (frames of the %d-frame bar pattern) x 80 ms (+920) and 14 ms (+486), 3 repeats = %.1f min (5 repeats: %.1f min)\n', ...
+            numel(bars), S.n_bars, total2 / 60, total2 / 60 * 5 / 3);
         fprintf('   perpendicular set frames (along the PD axis): %s\n', mat2str(bs.perp_frames_1based));
         fprintf('   parallel set frames (along the orthogonal axis): %s\n', mat2str(bs.par_frames_1based));
         fprintf('sequencer inputs: usable_pd %d (%s)\n', pp.usable_pd, pp.usable_pd_rule);
@@ -249,8 +252,8 @@ function R = rapid_readout(session_folder, varargin)
 
     %% ---------------------------------------------------------------- print
     if A.tutl_available, tutl_txt = sprintf('TUTL sets: %d / %d', A.m6_pd, A.m6_or); else, tutl_txt = 'TUTL sets not presented in this session'; end
-    fprintf('RF center (placement frame, M6 x M6): col %.1f, row %.1f (1-based); M6 bars %d / %d of 11 (%s)   centroid offset s %+.1f, v %+.1f px\n', ...
-        cc, cr, bs.perp_m6_1based, bs.par_m6_1based, tutl_txt, A.centroid_pd, A.centroid_or);
+    fprintf('RF center (placement frame, M6 x M6): col %.1f, row %.1f (1-based); M6 bars %d / %d of %d (%s)   centroid offset s %+.1f, v %+.1f px\n', ...
+        cc, cr, bs.perp_m6_1based, bs.par_m6_1based, S.nb, tutl_txt, A.centroid_pd, A.centroid_or);
     if A.tutl_available, fprintf('   distance to tutl_snapped_center: %.1f px\n', dist.tutl_snapped_center); end
     if isfield(dist, 'protocol1_ON_peak'), fprintf('   distance to protocol1_ON_peak (col %.1f row %.1f): %.1f px\n', p1(1), p1(2), dist.protocol1_ON_peak); end
     fprintf('sequencer inputs: usable_pd %d (%s); half-max peaks of the 80 ms profiles PD %d, orth %d (no unimodality verdict); placement-frame centroid offset s %+.1f, v %+.1f px, width68 s %.1f, v %.1f px; center expected ON 80 ms peak %s mV\n', ...
@@ -309,7 +312,7 @@ function R = rapid_readout(session_folder, varargin)
     if opts.Figure
         P = struct('cell', tag, 'pd', pp.pd_placement, 'pd_vector', pp.pd_vector_28, 'pd_vector_56', pp.pd_vector_56, 'pd_snapped', A.pd, 'center', G.center, 'center_xy', G.C, 'e_pd', G.e_pd, 'e_or', G.e_or, ...
                    'bar_cx', S.cx + 1, 'bar_cy', S.cy + 1, 'g_pd', bs.g_perp, 'g_or', bs.g_par, 'lattice', kept, 'sites', sites, 'p4_frames', p4_frames, ...
-                   'window', lattice_window());
+                   'window', lattice_window(), 'nb', S.nb);
         if ~isempty(p1), P.others = struct('name', 'protocol1_ON_peak', 'col', p1(1), 'row', p1(2)); end
         P.profiles.pd = struct('pos', bs.perp_pos_px, 'peak', bs.perp_peak, 'under', bs.perp_under, 'm6', bs.perp_m6_1based, 'set', bs.g_perp);
         P.profiles.or = struct('pos', bs.par_pos_px, 'peak', bs.par_peak, 'under', bs.par_under, 'm6', bs.par_m6_1based, 'set', bs.g_par);
@@ -393,20 +396,24 @@ function S = build_session(sdir, sid, Log, cat_dir)
     is_on = max(Pm(:)) > 4; S.is_on = is_on; S.flash_pattern = pats(fl).name;
     if is_on, W = min(max((Pm - 4) / 11, 0), 1); else, W = min(max((4 - Pm) / 4, 0), 1); end
     [H, Wd, ~] = size(W);
-    fp = double(reshape(W(:, :, 2:89), H * Wd, 88))';            % 88 x (H*W), column-major pixel order
+    % 8 bar sets of nb bars (generate_bar_flash_stimulus_xy: nb = 2 n_flank + 1; 11 bars, 88 frames + background
+    % for n_flank 5; 15 bars, 120 frames for n_flank 7, Auto_T4_v2 since 30 Oct 2026)
+    n_bar = size(W, 3) - 1; nb = n_bar / 8;
+    assert(nb == round(nb) && mod(nb, 2) == 1, 'rapid_readout:Flashes', '%s: %d bar frames are not 8 sets of an odd number of bars', pats(fl).name, n_bar);
+    fp = double(reshape(W(:, :, 2:n_bar + 1), H * Wd, n_bar))';  % n_bar x (H*W), column-major pixel order
     [rr, cc] = ndgrid(0:H-1, 0:Wd-1); X = cc(:)'; Y = rr(:)';
     a = sum(fp, 2); S.cx = (fp * X')' ./ a'; S.cy = (fp * Y')' ./ a';
     go = zeros(1, 8);
     for g = 0:7
         pts = [];
-        for k = 1:11
-            m = fp(g * 11 + k, :) > 0.5; pts = [pts; X(m)', -Y(m)']; %#ok<AGROW>
+        for k = 1:nb
+            m = fp(g * nb + k, :) > 0.5; pts = [pts; X(m)', -Y(m)']; %#ok<AGROW>
         end
         pts = pts - mean(pts, 1);
         [~, ~, V] = svd(pts, 'econ'); u = V(:, 1);
         go(g + 1) = mod(atan2d(u(2), u(1)), 180);
     end
-    S.g_orient = go; S.fp = fp; S.shape = [H, Wd];
+    S.g_orient = go; S.fp = fp; S.shape = [H, Wd]; S.n_bars = n_bar; S.nb = nb;
 end
 
 
@@ -416,7 +423,7 @@ function E = extract_events(S)
     E.static = []; E.sweep_keys = zeros(0, 2);
     E.sw28 = containers.Map('KeyType', 'char', 'ValueType', 'any');     % direction -> list of 28 dps trials
     E.sw56 = containers.Map('KeyType', 'char', 'ValueType', 'any');     % direction -> list of 56 dps trials (1 kHz traces, for the placement PD)
-    E.fl80 = repmat({{}}, 1, 88);                                        % bar -> list of flashes
+    E.fl80 = repmat({{}}, 1, S.n_bars);                                  % bar -> list of flashes
     for t = S.trials
         if ~isKey(S.funcs, t.fid), continue; end
         f = S.funcs(t.fid);
@@ -532,8 +539,8 @@ function A = analyse(S, E)
     [~, i] = min(abs(wrap180(dirs - ang)));
     A.pd = dirs(i); A.pd_vector = ang; A.nd = mod(A.pd + 180, 360);
     % 80 ms bar-flash amplitudes (compute_pos_peak_amplitudes convention) and the 1 kHz profiles
-    a995 = nan(1, 88); tr = nan(88, 1150);
-    for v = 1:88
+    a995 = nan(1, S.n_bars); tr = nan(S.n_bars, 1150);
+    for v = 1:S.n_bars
         lst = E.fl80{v}; if isempty(lst), continue; end
         raws = lst(cellfun(@(x) ~isempty(x.raw), lst));
         if ~isempty(raws)
@@ -546,7 +553,7 @@ function A = analyse(S, E)
         tr(v, 1:L) = mean(M, 1);
     end
     tr(isnan(tr)) = 0; sm = zeros(size(tr));
-    for v = 1:88, sm(v, :) = smooth5(tr(v, :)); end
+    for v = 1:S.n_bars, sm(v, :) = smooth5(tr(v, :)); end
     peak = max(sm(:, 251:550), [], 2)'; under = min(sm(:, 401:750), [], 2)';
     A.flash80_amp995 = a995; A.flash80_peak = peak; A.flash80_under = under;
     A = tutl_axes(A, S);
@@ -561,13 +568,13 @@ function A = tutl_axes(A, S)
     A.e_pd = e_pd; A.e_or = e_or;
     axn = {'pd', 'or'}; gs = [A.g_pd, A.g_or]; es = {e_pd, e_or};
     for j = 1:2
-        g = gs(j); idx = g * 11 + (1:11);
+        g = gs(j); idx = g * S.nb + (1:S.nb);
         pos = [S.cx(idx)', -S.cy(idx)'] * es{j}';
         [~, order] = sort(pos);                                          % ascending along the axis = the paper's pos_order
         amp = a995(idx(order));
         if all(isnan(amp))
-            A.(['bar_pos_' axn{j}]) = (pos - pos(order(6)))'; A.(['kc_' axn{j}]) = NaN; A.(['m6_' axn{j}]) = NaN;
-            A.(['profile_' axn{j}]) = nan(1, 11); A.(['under_' axn{j}]) = nan(1, 11); A.(['amp995_' axn{j}]) = amp(order);
+            A.(['bar_pos_' axn{j}]) = (pos - pos(order((S.nb + 1) / 2)))'; A.(['kc_' axn{j}]) = NaN; A.(['m6_' axn{j}]) = NaN;
+            A.(['profile_' axn{j}]) = nan(1, S.nb); A.(['under_' axn{j}]) = nan(1, S.nb); A.(['amp995_' axn{j}]) = amp(order);
             A.(['centroid_' axn{j}]) = NaN; A.(['width68_' axn{j}]) = NaN;
             continue;
         end
@@ -672,7 +679,7 @@ function bs = bar_sets(A, S, pd_place)
     bs = struct('g_perp', g_perp, 'g_par', g_par, 'tutl_g_pd', A.g_pd, 'tutl_g_or', A.g_or, 'same_sets_as_tutl', g_perp == A.g_pd && g_par == A.g_or, 'have_bars', have);
     names = {'perp', 'par'}; gs = [g_perp, g_par]; es = {e_pd, e_or}; kcs = [NaN NaN];
     for j = 1:2
-        g = gs(j); idx = g * 11 + (1:11);
+        g = gs(j); idx = g * S.nb + (1:S.nb);
         pos = ([S.cx(idx)', -S.cy(idx)'] * es{j}')'; [~, order] = sort(pos);
         if have
             a = amp(idx(order)); a(isnan(a)) = 0; m6 = compute_m6_centroid(max(a, 0), 0.68);
@@ -684,7 +691,7 @@ function bs = bar_sets(A, S, pd_place)
     end
     bs.e_pd = e_pd; bs.e_or = e_or; bs.center_xy = [];
     if have
-        kp = g_perp * 11 + kcs(1); ko = g_par * 11 + kcs(2);
+        kp = g_perp * S.nb + kcs(1); ko = g_par * S.nb + kcs(2);
         r_pd = [S.cx(kp), -S.cy(kp)]; r_or = [S.cx(ko), -S.cy(ko)];
         bs.center_xy = (r_pd * e_pd') * e_pd + (r_or * e_or') * e_or;
     end
@@ -692,7 +699,7 @@ end
 
 function C = tutl_center(A, S)
 % 2-D center from the TUTL sets and the snapped PD (the rule before 26 Oct 15:05), kept for the distance check.
-    k_pd = A.g_pd * 11 + A.kc_pd + 1; k_or = A.g_or * 11 + A.kc_or + 1;
+    k_pd = A.g_pd * S.nb + A.kc_pd + 1; k_or = A.g_or * S.nb + A.kc_or + 1;
     r_pd = [S.cx(k_pd), -S.cy(k_pd)]; r_or = [S.cx(k_or), -S.cy(k_or)];
     C = (r_pd * A.e_pd') * A.e_pd + (r_or * A.e_or') * A.e_or;
 end

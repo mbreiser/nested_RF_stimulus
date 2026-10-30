@@ -5,7 +5,8 @@ function generate_bar_flash_stimulus_xy(x, y, px_intensity, px_crop, on_off, exp
 % frames either side of the central frame. 
 % If "n_flank" = 5, then there will be 11 frames per bar orientation. 
 % There are 8 orientations in total so if "n_flank" = 5, then 11 x 8 = 88
-% frames.
+% frames (n_flank 7: 15 x 8 = 120 frames, bars out to +/-14 px; the
+% full-field patterns have those frames, 30 Oct 2026).
 
 % These will then be randomly selected. 
 
@@ -67,8 +68,10 @@ function generate_bar_flash_stimulus_xy(x, y, px_intensity, px_crop, on_off, exp
         
         overall_frame_range = (1:n_frames_orient)+frames_filled;
 
-        cf_of_pattern = centre_frames(p); % Which frame number has the bar in the centre of the arena. 
+        cf_of_pattern = centre_frames(p); % Which frame number has the bar in the centre of the arena.
         frames_from_patt = cf_of_pattern-(n_flank*2): 2 : cf_of_pattern+(n_flank*2);
+        assert(frames_from_patt(1) >= 1 && frames_from_patt(end) <= size(pattern.Pats, 3), ...
+            'generate_bar_flash_stimulus_xy: n_flank %d needs frames %d..%d of %s (%d frames)', n_flank, frames_from_patt(1), frames_from_patt(end), fname, size(pattern.Pats, 3));
 
         % Fill in the location with the central part of pattern. 
         for i = 1:n_frames_orient
